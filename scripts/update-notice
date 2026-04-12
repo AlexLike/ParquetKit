@@ -1,0 +1,538 @@
+#!/bin/bash
+# Regenerates the NOTICES file from Cargo.lock and Package.resolved.
+# Run this whenever dependencies change.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+DRIVER_DIR="$ROOT_DIR/Driver"
+CHECKOUTS_DIR="$ROOT_DIR/.build/checkouts"
+NOTICES_FILE="$ROOT_DIR/NOTICES"
+
+# ── Preflight ────────────────────────────────────────────────────────────────
+if ! command -v python3 &>/dev/null; then
+  echo "error: python3 is required" >&2; exit 1
+fi
+if [ ! -f "$DRIVER_DIR/Cargo.lock" ]; then
+  echo "error: $DRIVER_DIR/Cargo.lock not found" >&2; exit 1
+fi
+if [ ! -f "$ROOT_DIR/Package.resolved" ]; then
+  echo "error: $ROOT_DIR/Package.resolved not found" >&2; exit 1
+fi
+
+# Ensure Swift checkouts exist so we can read the license files
+if [ ! -d "$CHECKOUTS_DIR" ]; then
+  echo "Resolving Swift packages..."
+  (cd "$ROOT_DIR" && swift package resolve)
+fi
+
+echo "Generating NOTICES..."
+
+python3 - "$DRIVER_DIR/Cargo.lock" "$ROOT_DIR/Package.resolved" "$CHECKOUTS_DIR" "$NOTICES_FILE" << 'PYEOF'
+import json, os, re, sys
+
+cargo_lock_path, pkg_resolved_path, checkouts_dir, out_path = sys.argv[1:]
+
+# ── Cargo registry ───────────────────────────────────────────────────────────
+import glob as _glob
+reg_candidates = _glob.glob(os.path.expanduser("~/.cargo/registry/src/index.crates.io-*"))
+if not reg_candidates:
+    print("error: ~/.cargo/registry not found — run 'cargo fetch' in Driver/ first", file=sys.stderr)
+    sys.exit(1)
+REG = reg_candidates[0]
+
+# ── Parse Cargo.lock ─────────────────────────────────────────────────────────
+with open(cargo_lock_path) as f:
+    lock_content = f.read()
+
+rust_packages = []
+for block in re.split(r'\n\[\[package\]\]', lock_content):
+    nm = re.search(r'name = "([^"]+)"', block)
+    vm = re.search(r'version = "([^"]+)"', block)
+    if nm and vm and nm.group(1) != "parquet-swift":
+        rust_packages.append((nm.group(1), vm.group(1)))
+
+# ── Parse Package.resolved ───────────────────────────────────────────────────
+with open(pkg_resolved_path) as f:
+    resolved = json.load(f)
+
+swift_pins = resolved.get("pins", [])
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+def read_crate(name, version):
+    d = os.path.join(REG, f"{name}-{version}")
+    ct = os.path.join(d, "Cargo.toml")
+    if not os.path.exists(ct):
+        return None
+    with open(ct) as f:
+        toml = f.read()
+    lm = re.search(r'^license\s*=\s*"([^"]+)"', toml, re.MULTILINE)
+    rm = re.search(r'^repository\s*=\s*"([^"]+)"', toml, re.MULTILINE)
+    files = {}
+    for fn in ["LICENSE", "LICENSE.txt", "LICENSE.md", "LICENSE-APACHE", "LICENSE-MIT",
+               "LICENSE-Apache-2.0", "LICENCE", "COPYING", "UNLICENSE"]:
+        p = os.path.join(d, fn)
+        if os.path.exists(p):
+            with open(p) as f:
+                files[fn] = f.read()
+    return {
+        "name": name, "version": version,
+        "spdx": lm.group(1) if lm else "UNKNOWN",
+        "repo": rm.group(1) if rm else "",
+        "files": files,
+    }
+
+def chosen_license(spdx):
+    for x in ["Apache-2.0", "MPL-2.0", "MIT", "BSD-3-Clause", "BSD-2-Clause", "CC0-1.0"]:
+        if x in spdx:
+            return x
+    if "Unlicense" in spdx:
+        return "MIT"
+    return spdx
+
+def best_license_text(crate, lic):
+    files = crate["files"]
+    if lic == "Apache-2.0":
+        for k in ["LICENSE-APACHE", "LICENSE", "LICENSE.txt"]:
+            if k in files and "Apache" in files[k]:
+                return files[k].strip()
+    elif lic == "MIT":
+        for k in ["LICENSE-MIT", "LICENSE", "LICENSE.txt"]:
+            if k in files and ("Permission is hereby" in files[k] or "MIT" in files[k][:200]):
+                return files[k].strip()
+        for v in files.values():
+            if "Permission is hereby" in v:
+                return v.strip()
+    elif lic == "MPL-2.0":
+        for v in files.values():
+            if "Mozilla" in v:
+                return v.strip()
+    elif lic in ("BSD-3-Clause", "BSD-2-Clause"):
+        for v in files.values():
+            if "Redistributions" in v:
+                return v.strip()
+    for v in files.values():
+        return v.strip()
+    return None
+
+def extract_copyright(text):
+    if not text:
+        return None
+    for line in text.split("\n"):
+        s = line.strip()
+        if re.match(r"(copyright|\(c\)|©)", s, re.I) and len(s) > 10:
+            return s
+    return None
+
+# ── Load Rust crate data ─────────────────────────────────────────────────────
+crates = [c for n, v in rust_packages if (c := read_crate(n, v))]
+for c in crates:
+    c["chosen"] = chosen_license(c["spdx"])
+    c["text"] = best_license_text(c, c["chosen"])
+
+# ── Swift dep license data ───────────────────────────────────────────────────
+# Well-known copyright lines per package identity
+SWIFT_COPYRIGHTS = {
+    "swift-syntax":        "Copyright (c) 2014 - 2024 Apple Inc. and the Swift project authors",
+    "swift-docc-plugin":   "Copyright (c) 2022 Apple Inc. and the Swift project authors",
+    "swift-docc-symbolkit":"Copyright (c) 2021 Apple Inc. and the Swift project authors",
+}
+
+swift_deps = []
+swift_apache_text = None
+
+for pin in swift_pins:
+    identity = pin["identity"]
+    version  = pin["state"].get("version", pin["state"].get("revision", "unknown"))
+    location = pin["location"]
+    copyright = SWIFT_COPYRIGHTS.get(identity, f"Copyright (c) Apple Inc. and the Swift project authors")
+
+    # Try to read license text from checkout
+    checkout_dir = os.path.join(checkouts_dir, identity)
+    lic_text = None
+    if os.path.isdir(checkout_dir):
+        for fn in ["LICENSE.txt", "LICENSE", "LICENSE.md"]:
+            p = os.path.join(checkout_dir, fn)
+            if os.path.exists(p):
+                with open(p) as f:
+                    lic_text = f.read().strip()
+                break
+
+    if lic_text and swift_apache_text is None:
+        swift_apache_text = lic_text
+
+    swift_deps.append({
+        "name": identity,
+        "version": version,
+        "location": location,
+        "copyright": copyright,
+        "text": lic_text,
+    })
+
+# Fallback: derive Apache-2.0 text from a Rust crate that has it
+if swift_apache_text is None:
+    swift_apache_text = next(
+        (c["text"] for c in crates
+         if c["chosen"] == "Apache-2.0" and c["text"] and "Apache License" in c["text"]),
+        "[Apache License, Version 2.0 — see https://www.apache.org/licenses/LICENSE-2.0]"
+    )
+
+SWIFT_RUNTIME_EXCEPTION = """\
+ADDITIONAL LICENSE INFORMATION — Swift Runtime Library Exception
+
+As an exception, if you use this Software to compile your source code and
+portions of this Software are embedded into the binary product as a result, you
+may redistribute such product without providing attribution as would otherwise
+be required by Sections 4(a), 4(b) and 4(d) of the License."""
+
+MPL2_TEXT = """\
+Mozilla Public License Version 2.0
+==================================
+
+1. Definitions
+--------------
+
+1.1. "Contributor" means each individual or legal entity that creates, modifies,
+or contributes to the creation of Covered Software.
+
+1.2. "Contributor Version" means the combination of the Contributions of others
+(if any) used by a Contributor and that particular Contributor's Contribution.
+
+1.3. "Contribution" means Covered Software of a particular Contributor.
+
+1.4. "Covered Software" means Source Code Form to which the initial Contributor
+has attached the notice in Exhibit A, the Executable Form of such Source Code
+Form, and Modifications of such Source Code Form, in each case including
+portions thereof.
+
+1.5. "Incompatible With Secondary Licenses" means (a) that the initial
+Contributor has attached the notice described in Exhibit B to the Covered
+Software; or (b) that the Covered Software was obtained under the terms of
+version 1.1 or earlier of the License, but not also under the terms of a
+Secondary License.
+
+1.6. "Executable Form" means any form of the work other than Source Code Form.
+
+1.7. "Larger Work" means a work that combines Covered Software with other
+material, in a separate file or files, that is not Covered Software.
+
+1.8. "License" means this document.
+
+1.9. "Licensable" means having the right to grant, to the maximum extent
+possible, whether at the time of the initial grant or subsequently, any and all
+of the rights conveyed by this License.
+
+1.10. "Modifications" means any of the following: (a) any file in Source Code
+Form that results from an addition to, deletion from, or modification of the
+contents of Covered Software; or (b) any new file in Source Code Form that
+contains any Covered Software.
+
+1.11. "Patent Claims" of a Contributor means any patent claim(s), including
+without limitation, method, process, and apparatus claims, in any patent
+Licensable by such Contributor that would be infringed, but for the grant of
+the License, to make, use, sell, offer for sale, have made, import, or transfer
+either its Contributions or its Contributor Version.
+
+1.12. "Secondary License" means either the GNU General Public License, Version
+2.0, the GNU Lesser General Public License, Version 2.1, the GNU Affero General
+Public License, Version 3.0, or any later versions of those licenses.
+
+1.13. "Source Code Form" means the form of the work preferred for making
+modifications.
+
+1.14. "You" (or "Your") means an individual or a legal entity exercising rights
+under this License.
+
+2. License Grants and Conditions
+---------------------------------
+
+2.1. Grants. Each Contributor hereby grants You a world-wide, royalty-free,
+non-exclusive license: (a) under intellectual property rights (other than patent
+or trademark) Licensable by such Contributor to use, reproduce, make available,
+sell, offer for sale, have sold, distribute, and otherwise exploit its
+Contributions, either on an unmodified basis, with Modifications, or as part of
+a Larger Work; and (b) under Patent Claims of such Contributor to make, use,
+sell, offer for sale, have sold, and otherwise transfer either its Contributions
+or its Contributor Version.
+
+2.2. Effective Date. The licenses granted in Section 2.1 with respect to any
+Contribution become effective for each Contribution on the date the Contributor
+first distributes such Contribution.
+
+2.3. Limitations on Grant Scope. The licenses granted in this Section 2 are the
+only rights granted under this License. No additional rights or immunities are
+granted.
+
+2.4. Subsequent Licenses. No Contributor makes additional grants as a result of
+Your choice to distribute the Covered Software under a subsequent version of
+this License (see Section 10.2) or under the terms of a Secondary License (if
+permitted under the terms of Section 3.3).
+
+2.5. Representation. Each Contributor represents that the Contributor believes
+its Contributions are its Contributor Version.
+
+2.6. Fair Use. This License is not intended to limit any rights You have under
+applicable copyright doctrines of fair use, fair dealing, or other equivalents.
+
+2.7. Conditions. Sections 3.1, 3.2, 3.3, and 3.4 are conditions of the
+licenses granted in Section 2.1.
+
+3. Responsibilities
+-------------------
+
+3.1. Distribution of Source Form. All distribution of Covered Software in
+Source Code Form, including any Modifications that You create or to which You
+contribute, must be under the terms of this License. You must inform recipients
+that the Source Code Form of the Covered Software is governed by the terms of
+this License, and how they can obtain a copy of this License. You may not
+attempt to impose any further restrictions on the recipients' exercise of the
+rights granted herein.
+
+3.2. Availability of Source Code. Any Modification which You create or to which
+you contribute must be made available in Source Code Form as described in
+Section 3.1 and by distributing the Source Code Form, or by making its Source
+Code Form available at a network address through which it can be accessed, or
+by providing access to the Source Code Form at the same time as distributing the
+Executable Form.
+
+3.3. Distribution of a Larger Work. You may create and distribute a Larger Work
+under terms of Your choice, provided that You also comply with the requirements
+of this License for the Covered Software. If the Larger Work is a Combined Work,
+the terms of this License will continue to apply to the part which is the
+Covered Software, and the terms of the other license will apply to the rest of
+the Larger Work.
+
+3.4. Notices. You may not remove or alter the substance of any license notices
+(including copyright notices, patent notices, disclaimers of warranty, or
+limitations of liability) contained within the Source Code Form of the Covered
+Software, except that You may alter any license notices to the extent required
+to remedy known factual inaccuracies.
+
+3.5. Application of Additional Terms. You may choose to offer, and to charge a
+fee for, warranty, support, indemnity or other liability obligations and/or
+rights consistent with this License. However, in accepting such obligations, You
+may act only on Your own behalf and on Your sole responsibility, not on behalf
+of any other Contributor.
+
+4. Inability to Comply Due to Statute or Regulation
+----------------------------------------------------
+
+If it is impossible for You to comply with any of the terms of this License with
+respect to some or all of the Covered Software due to statute, judicial order,
+or regulation then You must: (a) comply with the terms of this License to the
+maximum extent possible; and (b) describe the limitations and the parts of the
+Covered Software to which they apply. Such description must be placed in a text
+file included with all distributions of the Covered Software under this License.
+
+5. Termination
+--------------
+
+5.1. The rights granted under this License will terminate automatically if You
+fail to comply with any of its terms. However, if You become compliant, then the
+rights granted under a given Contributor to You under this License (a)
+provisionally, unless and until such Contributor explicitly and finally
+terminates Your grants, and (b) on an ongoing basis, if such Contributor fails
+to notify You of the non-compliance by some reasonable means prior to 60 days
+after You have become aware of the non-compliance.
+
+5.2. If You initiate litigation against any entity by asserting a patent
+infringement claim (excluding declaratory judgment actions, counter-claims, and
+cross-claims) alleging that a Contributor Version directly or indirectly
+infringes any patent, then the rights granted to You by any and all Contributors
+for the Covered Software under Section 2.1 of this License shall terminate.
+
+5.3. In the event of termination under Sections 5.1 or 5.2 above, all end user
+license agreements (excluding distributors and resellers) which have been
+granted by You or Your distributors under this License prior to termination
+shall survive termination.
+
+6. Disclaimer of Warranty
+--------------------------
+
+Covered Software is provided under this License on an "as is" basis, without
+warranty of any kind, either expressed, implied, or statutory, including,
+without limitation, warranties that the Covered Software is free of defects,
+merchantable, fit for a particular purpose or non-infringing. The entire risk as
+to the quality and performance of the Covered Software is with You.
+
+7. Limitation of Liability
+---------------------------
+
+Under no circumstances and under no legal theory, whether tort (including
+negligence), contract, or otherwise, shall any Contributor, or anyone who
+distributes Covered Software as permitted above, be liable to You for any
+direct, indirect, special, incidental, or consequential damages of any
+character including, without limitation, damages for lost profits, loss of
+goodwill, work stoppage, computer failure or malfunction, or any and all other
+commercial damages or losses, even if such Contributor has been advised of the
+possibility of such damages.
+
+8. Litigation
+-------------
+
+Any litigation relating to this License may be brought only in the courts of a
+jurisdiction where the Contributor maintains its principal place of business and
+such litigation shall be governed by laws of that jurisdiction, without
+reference to its conflict-of-law provisions.
+
+9. Miscellaneous
+----------------
+
+This License represents the complete agreement concerning the subject matter
+hereof. If any provision of this License is held to be unenforceable, such
+provision shall be reformed only to the extent necessary to make it enforceable.
+
+10. Versions of the License
+----------------------------
+
+10.1. New Versions. Mozilla Foundation is the license steward. Except as
+provided in Section 10.3, no one other than the license steward has the right to
+modify or publish new versions of this License. Each version will be given a
+distinguishing version number.
+
+10.2. Effect of New Versions. You may distribute the Covered Software under the
+terms of the version of the License under which You originally received the
+Covered Software, or under the terms of any subsequent version published by the
+license steward.
+
+10.3. Modified Versions. If you create software not governed by this License,
+and you want to create a new license for such software, you may create and use a
+modified version of this License if you rename the license and remove any
+references to the name of the license steward.
+
+10.4. Distributing Source Code Form that is Incompatible With Secondary
+Licenses. If You choose to distribute Source Code Form that is Incompatible With
+Secondary Licenses under the terms of this version of the License, the notice
+described in Exhibit B of this License must be attached.
+
+Exhibit A - Source Code Form License Notice
+-------------------------------------------
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+Exhibit B - "Incompatible With Secondary Licenses" Notice
+----------------------------------------------------------
+
+  This Source Code Form is "Incompatible With Secondary Licenses", as
+  defined by the Mozilla Public License, v. 2.0."""
+
+# ── Render ───────────────────────────────────────────────────────────────────
+SEP = "=" * 80
+lines = []
+
+def section(title):
+    lines.extend([SEP, title, SEP, ""])
+
+lines += [
+    "THIRD-PARTY SOFTWARE NOTICES",
+    "",
+    "ParquetKit incorporates third-party software components listed below.",
+    "Each component is subject to its own license terms.",
+    "",
+    "",
+]
+
+# Swift deps
+section("Swift Package Dependencies")
+lines += [
+    "The following Swift packages are licensed under the Apache License, Version 2.0",
+    "with the Swift Runtime Library Exception.",
+    "",
+]
+for dep in swift_deps:
+    lines.append(f"  {dep['name']} {dep['version']}")
+    lines.append(f"    {dep['copyright']}")
+    lines.append(f"    {dep['location']}")
+lines += ["", "License text (Apache License, Version 2.0 + Swift Runtime Library Exception):", ""]
+lines.append(swift_apache_text)
+lines += ["", SWIFT_RUNTIME_EXCEPTION, "", ""]
+
+# Apache-2.0 Rust crates
+apache_crates = sorted([c for c in crates if c["chosen"] == "Apache-2.0"], key=lambda c: c["name"])
+apache_text = next(
+    (c["text"] for c in apache_crates if c["text"] and "Apache License" in c["text"]), ""
+)
+section(f"Rust Crates \u2014 Apache License, Version 2.0  ({len(apache_crates)} crates)")
+for c in apache_crates:
+    cr = extract_copyright(c["text"])
+    line = f"  {c['name']} {c['version']}"
+    if cr:
+        line += f"\n    {cr}"
+    if c["repo"]:
+        line += f"\n    {c['repo']}"
+    lines.append(line)
+lines += ["", "License text (Apache License, Version 2.0):", "", apache_text, "", ""]
+
+# MIT Rust crates
+mit_crates = sorted([c for c in crates if c["chosen"] == "MIT"], key=lambda c: c["name"])
+mit_text = next(
+    (c["text"] for c in mit_crates if c["text"] and "Permission is hereby" in c["text"]), ""
+)
+section(f"Rust Crates \u2014 MIT License  ({len(mit_crates)} crates)")
+for c in mit_crates:
+    cr = extract_copyright(c["text"])
+    line = f"  {c['name']} {c['version']}"
+    if cr:
+        line += f"\n    {cr}"
+    if c["repo"]:
+        line += f"\n    {c['repo']}"
+    lines.append(line)
+lines += ["", "License text (MIT License):", "", mit_text, "", ""]
+
+# MPL-2.0 Rust crates
+mpl_crates = sorted([c for c in crates if c["chosen"] == "MPL-2.0"], key=lambda c: c["name"])
+section(f"Rust Crates \u2014 Mozilla Public License 2.0  ({len(mpl_crates)} crates)")
+for c in mpl_crates:
+    line = f"  {c['name']} {c['version']}"
+    repo = c["repo"] or "https://github.com/mozilla/uniffi-rs"
+    line += f"\n    {repo}"
+    lines.append(line)
+lines += ["", "License text (Mozilla Public License 2.0):", "", MPL2_TEXT, "", ""]
+
+# BSD Rust crates
+bsd_crates = sorted(
+    [c for c in crates if c["chosen"] in ("BSD-3-Clause", "BSD-2-Clause")],
+    key=lambda c: c["name"],
+)
+if bsd_crates:
+    section(f"Rust Crates \u2014 BSD License  ({len(bsd_crates)} crates)")
+    for c in bsd_crates:
+        line = f"  {c['name']} {c['version']}  ({c['chosen']})"
+        if c["text"]:
+            cr = extract_copyright(c["text"])
+            if cr:
+                line += f"\n    {cr}"
+        if c["repo"]:
+            line += f"\n    {c['repo']}"
+        lines.append(line)
+        if c["text"]:
+            lines += ["", "  License text:", ""]
+            lines += ["  " + l for l in c["text"].split("\n")]
+            lines.append("")
+    lines.append("")
+
+# CC0 Rust crates
+cc0_crates = sorted([c for c in crates if c["chosen"] == "CC0-1.0"], key=lambda c: c["name"])
+if cc0_crates:
+    section(f"Rust Crates \u2014 Creative Commons Zero (CC0-1.0)  ({len(cc0_crates)} crates)")
+    for c in cc0_crates:
+        line = f"  {c['name']} {c['version']}"
+        if c["repo"]:
+            line += f"\n    {c['repo']}"
+        lines.append(line)
+    lines += [
+        "",
+        "These components are released under CC0-1.0 (public domain dedication).",
+        "No attribution is legally required, but is acknowledged here for completeness.",
+        "",
+    ]
+
+with open(out_path, "w") as f:
+    f.write("\n".join(lines) + "\n")
+
+print(f"Written {len(lines)} lines to {out_path}")
+PYEOF
+
+echo "Done: $NOTICES_FILE"

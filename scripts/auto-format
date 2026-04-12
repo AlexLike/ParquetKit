@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+YELLOW='\033[0;33m' GREEN='\033[0;32m' RED='\033[0;31m' NC='\033[0m'
+
+fail() { echo -e "${RED}✗ $1${NC}"; exit 1; }
+pass() { echo -e "${GREEN}✓ $1${NC}"; }
+
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# ── Swift formatting ──────────────────────────────────────────────────────
+echo -e "${YELLOW}Swift format…${NC}"
+swift format --recursive -i \
+  "$ROOT_DIR/Sources/ParquetKit" \
+  "$ROOT_DIR/Sources/ParquetKitMacros" \
+  "$ROOT_DIR/Tests" \
+  "$ROOT_DIR/Package.swift" \
+  || fail "swift format failed"
+pass "Swift format"
+
+# ── Rust formatting ───────────────────────────────────────────────────────
+echo -e "\n${YELLOW}Rust fmt…${NC}"
+(cd "$ROOT_DIR/Driver" && cargo fmt --all) \
+  || fail "cargo fmt failed"
+pass "Rust fmt"
+
+echo -e "\n${GREEN}Done.${NC}"

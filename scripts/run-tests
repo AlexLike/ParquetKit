@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+YELLOW='\033[0;33m' GREEN='\033[0;32m' RED='\033[0;31m' NC='\033[0m'
+
+fail() { echo -e "${RED}✗ $1${NC}"; exit 1; }
+pass() { echo -e "${GREEN}✓ $1${NC}"; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+echo "Running tests…"
+
+# ── Rust clippy ───────────────────────────────────────────────────────────
+echo -e "\n${YELLOW}Rust clippy…${NC}"
+(cd "$ROOT_DIR/Driver" && cargo clippy --all-targets --all-features --target aarch64-apple-darwin -- -D warnings) \
+  || fail "Clippy warnings found."
+pass "Rust clippy"
+
+# ── Rust tests ────────────────────────────────────────────────────────────
+echo -e "\n${YELLOW}Rust tests…${NC}"
+(cd "$ROOT_DIR/Driver" && cargo test --target aarch64-apple-darwin) \
+  || fail "Rust tests failed."
+pass "Rust tests"
+
+# ── Build xcframework (TEST slice) if needed ──────────────────────────────
+# The Swift test suite depends on a built xcframework. Build it unconditionally
+# so that the tests always reflect the current Driver source.
+echo -e "\n${YELLOW}Building xcframework…${NC}"
+bash "$SCRIPT_DIR/build-xcframework" \
+  || fail "xcframework build failed."
+pass "xcframework built"
+
+# ── Swift tests (macOS) ───────────────────────────────────────────────────
+echo -e "\n${YELLOW}Swift tests (macOS)…${NC}"
+(cd "$ROOT_DIR" && swift test) \
+  || fail "Swift tests failed."
+pass "Swift tests (macOS)"
+
+echo -e "\n${GREEN}All tests passed.${NC}"

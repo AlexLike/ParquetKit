@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+swift package --allow-writing-to-directory ./Docs \
+  generate-documentation --target ParquetKit --output-path ./Docs \
+  --transform-for-static-hosting
+
+python3 -m http.server 3000 --directory ./Docs &
+SERVER_PID=$!
+trap "kill $SERVER_PID" EXIT
+
+python3 -c "import webbrowser; webbrowser.open('http://localhost:3000/documentation/ParquetKit')"
+wait $SERVER_PID

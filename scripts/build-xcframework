@@ -1,0 +1,158 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+DRIVER_DIR="$ROOT_DIR/Driver"
+OUTPUT_DIR="$ROOT_DIR/ParquetKitFFI.xcframework"
+SWIFT_DIR="$ROOT_DIR/Sources/ParquetKitFFI"
+BUILD_DIR="$DRIVER_DIR/target"
+
+# Clean previous output
+rm -rf "$OUTPUT_DIR"
+mkdir -p "$SWIFT_DIR"
+
+cd "$DRIVER_DIR"
+
+# ── Build mode ──────────────────────────────────────────────────────
+PROFILE="${1:-debug}"
+if [ "$PROFILE" = "release" ] || [ "$PROFILE" = "--release" ]; then
+  CARGO_FLAGS="--release"
+  PROFILE_DIR="release"
+else
+  CARGO_FLAGS=""
+  PROFILE_DIR="debug"
+fi
+
+echo "Building with profile: $PROFILE_DIR"
+
+# ── Targets ─────────────────────────────────────────────────────────
+if [ "${FULL:-0}" = "1" ]; then
+  TARGETS="aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim aarch64-apple-ios-macabi aarch64-apple-tvos aarch64-apple-tvos-sim aarch64-apple-visionos aarch64-apple-visionos-sim aarch64-apple-watchos aarch64-apple-watchos-sim"
+else
+  TARGETS="aarch64-apple-darwin"
+fi
+
+# ── Deployment targets (must match Package.swift platforms) ──────────
+deployment_env() {
+  case "$1" in
+    *-apple-darwin)           echo "MACOSX_DEPLOYMENT_TARGET=10.15" ;;
+    *-apple-ios-macabi)       echo "IPHONEOS_DEPLOYMENT_TARGET=13.1" ;; # SDK minimum for macabi is 13.1, not 13.0
+    *-apple-ios*)             echo "IPHONEOS_DEPLOYMENT_TARGET=13.0" ;;
+    *-apple-tvos*)            echo "TVOS_DEPLOYMENT_TARGET=13.0" ;;
+    *-apple-visionos*)        echo "XROS_DEPLOYMENT_TARGET=1.0" ;;
+    *-apple-watchos*)         echo "WATCHOS_DEPLOYMENT_TARGET=9.0" ;;
+  esac
+}
+
+# ── Compile ─────────────────────────────────────────────────────────
+for target in $TARGETS; do
+  env_var="$(deployment_env "$target")"
+  echo "Building for $target ($env_var)..."
+  env "$env_var" cargo build $CARGO_FLAGS --target "$target"
+done
+
+# ── Generate Swift bindings ─────────────────────────────────────────
+echo "Generating Swift bindings..."
+FIRST_TARGET=$(echo $TARGETS | awk '{print $1}')
+
+# For bindgen, we need the dylib (debug build on host)
+env "$(deployment_env "$FIRST_TARGET")" cargo build --target "$FIRST_TARGET"
+BINDGEN_LIB="$BUILD_DIR/$FIRST_TARGET/debug/libparquet_swift.dylib"
+
+cargo run --bin uniffi-bindgen generate \
+  --library "$BINDGEN_LIB" \
+  --language swift \
+  --out-dir "$SWIFT_DIR"
+
+# ── Create XCFramework ──────────────────────────────────────────────
+echo "Creating XCFramework..."
+
+STAGING_DIR="$BUILD_DIR/xcframework-staging"
+rm -rf "$STAGING_DIR"
+
+# For dev mode (single target), simple path
+if [ "${FULL:-0}" != "1" ]; then
+  PLATFORM_DIR="$STAGING_DIR/macos"
+  mkdir -p "$PLATFORM_DIR/Headers"
+  cp "$BUILD_DIR/$FIRST_TARGET/$PROFILE_DIR/libparquet_swift.a" "$PLATFORM_DIR/libparquet_swift.a"
+  cp "$SWIFT_DIR/parquet_swiftFFI.h" "$PLATFORM_DIR/Headers/"
+  cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$PLATFORM_DIR/Headers/module.modulemap"
+
+  xcodebuild -create-xcframework \
+    -library "$PLATFORM_DIR/libparquet_swift.a" \
+    -headers "$PLATFORM_DIR/Headers" \
+    -output "$OUTPUT_DIR"
+else
+  # Full build: create per-platform directories
+  create_platform_slice() {
+    local name="$1"
+    shift
+    local libs="$@"
+    local dir="$STAGING_DIR/$name"
+    mkdir -p "$dir/Headers"
+
+    # lipo if multiple, copy if single
+    local count=$(echo "$libs" | wc -w)
+    if [ "$count" -eq 1 ]; then
+      cp $libs "$dir/libparquet_swift.a"
+    else
+      lipo -create $libs -output "$dir/libparquet_swift.a"
+    fi
+
+    cp "$SWIFT_DIR/parquet_swiftFFI.h" "$dir/Headers/"
+    cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$dir/Headers/module.modulemap"
+    echo "-library $dir/libparquet_swift.a -headers $dir/Headers"
+  }
+
+  FRAMEWORK_ARGS=""
+
+  # macOS (may have two archs)
+  MACOS_LIBS=""
+  for t in aarch64-apple-darwin x86_64-apple-darwin; do
+    LIB="$BUILD_DIR/$t/$PROFILE_DIR/libparquet_swift.a"
+    [ -f "$LIB" ] && MACOS_LIBS="$MACOS_LIBS $LIB"
+  done
+  [ -n "$MACOS_LIBS" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice macos $MACOS_LIBS)"
+
+  # iOS device
+  LIB="$BUILD_DIR/aarch64-apple-ios/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice ios $LIB)"
+
+  # iOS simulator
+  LIB="$BUILD_DIR/aarch64-apple-ios-sim/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice ios-simulator $LIB)"
+
+  # Mac Catalyst
+  LIB="$BUILD_DIR/aarch64-apple-ios-macabi/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice maccatalyst $LIB)"
+
+  # tvOS
+  LIB="$BUILD_DIR/aarch64-apple-tvos/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice tvos $LIB)"
+
+  # tvOS simulator
+  LIB="$BUILD_DIR/aarch64-apple-tvos-sim/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice tvos-simulator $LIB)"
+
+  # visionOS
+  LIB="$BUILD_DIR/aarch64-apple-visionos/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice xros $LIB)"
+
+  # visionOS simulator
+  LIB="$BUILD_DIR/aarch64-apple-visionos-sim/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice xros-simulator $LIB)"
+
+  # watchOS
+  LIB="$BUILD_DIR/aarch64-apple-watchos/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice watchos $LIB)"
+
+  # watchOS simulator
+  LIB="$BUILD_DIR/aarch64-apple-watchos-sim/$PROFILE_DIR/libparquet_swift.a"
+  [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice watchos-simulator $LIB)"
+
+  eval xcodebuild -create-xcframework $FRAMEWORK_ARGS -output "$OUTPUT_DIR"
+fi
+
+echo "XCFramework created at $OUTPUT_DIR"
+echo "Swift bindings at $SWIFT_DIR/parquet_swift.swift"

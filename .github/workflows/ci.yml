@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Swift formatting ─────────────────────────────────────────────────────
+  swift-format:
+    name: Swift formatting
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check Swift formatting
+        run: swift format lint --recursive --strict Sources/ParquetKit Sources/ParquetKitMacros Tests Package.swift
+
+  # ── Rust fmt / clippy / test ──────────────────────────────────────────────
+  rust-checks:
+    name: Rust fmt / clippy / test
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: Driver
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toolchain cache: keyed only on rust-toolchain.toml; changes rarely.
+      # Prevents re-downloading the beta toolchain (15 components) on every job.
+      - name: Cache Rust toolchain
+        uses: actions/cache@v5
+        with:
+          path: ~/.rustup/toolchains
+          key: rustup-${{ runner.os }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
+
+      # Artifact cache: keyed on Cargo.lock + Cargo.toml + toolchain.
+      # Using --target aarch64-apple-darwin explicitly so artifacts land in
+      # Driver/target/aarch64-apple-darwin/debug/; the same directory that
+      # bindings-sync and the xcframework build use, making this cache shared.
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            Driver/target
+          key: rust-${{ runner.os }}-${{ hashFiles('Driver/Cargo.lock', 'Driver/Cargo.toml', 'Driver/rust-toolchain.toml') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      # rust-toolchain.toml is in Driver/; rustup auto-installs the beta toolchain
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features --target aarch64-apple-darwin -- -D warnings
+      - run: cargo test --target aarch64-apple-darwin
+
+  # ── Verify committed Swift bindings match Rust UDL ───────────────────────
+  bindings-sync:
+    name: Check Swift bindings in sync with UDL
+    runs-on: macos-latest
+    needs: rust-checks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v5
+        with:
+          path: ~/.rustup/toolchains
+          key: rustup-${{ runner.os }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
+
+      - name: Restore Rust build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            Driver/target
+          key: rust-${{ runner.os }}-${{ hashFiles('Driver/Cargo.lock', 'Driver/Cargo.toml', 'Driver/rust-toolchain.toml') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Regenerate Swift bindings
+        working-directory: Driver
+        run: |
+          MACOSX_DEPLOYMENT_TARGET=10.15 cargo build --target aarch64-apple-darwin
+          cargo run --bin uniffi-bindgen generate \
+            --library target/aarch64-apple-darwin/debug/libparquet_swift.dylib \
+            --language swift \
+            --out-dir /tmp/generated-bindings
+
+      - name: Diff against committed bindings
+        run: |
+          diff /tmp/generated-bindings/parquet_swift.swift \
+               Sources/ParquetKitFFI/parquet_swift.swift
+
+  # ── Build xcframework + swift test ───────────────
+  swift-build-test:
+    name: Swift build and test (macOS)
+    runs-on: macos-latest
+    needs: rust-checks
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v5
+        with:
+          path: ~/.rustup/toolchains
+          key: rustup-${{ runner.os }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
+
+      - name: Restore Rust build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            Driver/target
+          key: rust-${{ runner.os }}-${{ hashFiles('Driver/Cargo.lock', 'Driver/Cargo.toml', 'Driver/rust-toolchain.toml') }}
+          restore-keys: rust-${{ runner.os }}-
+
+      - name: Cache xcframework (TEST slice)
+        id: xcframework-cache
+        uses: actions/cache@v5
+        with:
+          path: ParquetKitFFI.xcframework
+          # Intentionally no restore-keys: a stale xcframework from a different
+          # Driver hash must never be reused; it would mask ABI changes.
+          key: xcframework-test-${{ runner.os }}-${{ hashFiles('Driver/**') }}
+
+      - name: Build xcframework (cache miss)
+        if: steps.xcframework-cache.outputs.cache-hit != 'true'
+        run: bash scripts/build-xcframework
+
+      - name: Cache Swift build artifacts
+        uses: actions/cache@v5
+        with:
+          path: .build
+          # Key covers both SPM dependencies (Package.resolved) and the Rust driver
+          # (Driver/**) since a new xcframework invalidates previous build artifacts.
+          key: swift-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Driver/**') }}
+          restore-keys: swift-${{ runner.os }}-
+
+      - name: swift test (macOS)
+        run: swift test
