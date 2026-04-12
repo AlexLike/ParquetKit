@@ -3,6 +3,13 @@
 ## 1.0.0 (2026-04-12)
 
 
+### Miscellaneous Chores
+
+* bootstrap first release ([e061d97](https://github.com/AlexLike/ParquetKit/commit/e061d97b2fa73ab18db6148f4ac190c818d96e5b))
+
+## 1.0.0 (2026-04-12)
+
+
 ### Bug Fixes
 
 * don't compile macro tests for iOS. Cache Rust toolchain. ([ee41fa7](https://github.com/AlexLike/ParquetKit/commit/ee41fa740282963925d83a0d76b544e3394854a1))
