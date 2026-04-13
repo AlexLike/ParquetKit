@@ -21,7 +21,8 @@ let package = Package(
   targets: [
     .binaryTarget(
       name: "ParquetKitFFIBinary",
-      path: "ParquetKitFFI.xcframework"
+      url: "https://github.com/AlexLike/ParquetKit/releases/download/v1.0.0/ParquetKitFFI.xcframework.zip",
+      checksum: "683fd40f83004b1a4d383c5f004a29194cbd74c4a09ce4c409f2d265e4cbab78"
     ),
     .target(
       name: "ParquetKitFFI",
