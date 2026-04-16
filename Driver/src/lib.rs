@@ -61,6 +61,7 @@ pub enum PrimitiveType {
   /// `Interval(MonthDayNano)` with millis converted to nanoseconds.
   Interval,
   Float16,
+  Uuid,
   FixedBytes {
     size: u32,
   },

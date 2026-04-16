@@ -362,7 +362,7 @@ private func resolvePrimitiveOrStructSchema(_ typeName: String, name: String, nu
     "Double": ".float64",
     "String": ".utf8",
     "Data": ".bytes",
-    "UUID": ".fixedBytes(size: 16)",
+    "UUID": ".uuid",
     "ParquetDate": ".date32",
     "Duration": ".durationNs",
   ]

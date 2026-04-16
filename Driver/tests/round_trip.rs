@@ -1114,3 +1114,88 @@ fn type_mismatch_writing_wrong_value() {
     other => panic!("expected ParquetError::TypeMismatch, got: {other:?}"),
   }
 }
+
+// ── Parquet schema inspection ───────────────────────────────────────
+
+/// Open a Parquet file and return the physical type + logical type of
+/// the first (and only) column via the raw Parquet metadata API.
+fn inspect_first_column(path: &str) -> (parquet::basic::Type, Option<parquet::basic::LogicalType>) {
+  use parquet::file::reader::{FileReader, SerializedFileReader};
+  use std::fs::File;
+  let file = File::open(path).unwrap();
+  let reader = SerializedFileReader::new(file).unwrap();
+  let meta = reader.metadata();
+  let col = meta.file_metadata().schema_descr().column(0);
+  (col.physical_type(), col.logical_type_ref().cloned())
+}
+
+#[test]
+fn verify_float64_physical_type() {
+  // Float64 MUST be written as Parquet physical type DOUBLE — not
+  // FIXED_LEN_BYTE_ARRAY(8) or anything else.
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Float64,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  let path = tmp.path().to_str().unwrap().to_string();
+  let writer = WriterHandle::new(path.clone(), schema, default_config()).unwrap();
+  writer
+    .append_row(vec![ColumnValue::Float64 { v: 1.0 }])
+    .unwrap();
+  writer.close().unwrap();
+
+  let (physical, logical) = inspect_first_column(&path);
+  assert_eq!(
+    physical,
+    parquet::basic::Type::DOUBLE,
+    "Float64 must have Parquet physical type DOUBLE"
+  );
+  assert_eq!(logical, None, "Float64 needs no logical type annotation");
+}
+
+#[test]
+fn verify_uuid_logical_type() {
+  // UUID MUST be written as FIXED_LEN_BYTE_ARRAY(16) with Parquet UUID
+  // logical type so that external readers (PyArrow, DuckDB, …) recognise it.
+  let schema = vec![FieldSchema::Primitive {
+    name: "id".into(),
+    r#type: PrimitiveType::Uuid,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  let path = tmp.path().to_str().unwrap().to_string();
+  let writer = WriterHandle::new(path.clone(), schema, default_config()).unwrap();
+  let uuid_bytes: Vec<u8> = (0..16).collect();
+  writer
+    .append_row(vec![ColumnValue::Bytes { v: uuid_bytes }])
+    .unwrap();
+  writer.close().unwrap();
+
+  let (physical, logical) = inspect_first_column(&path);
+  assert_eq!(
+    physical,
+    parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
+    "UUID must have Parquet physical type FIXED_LEN_BYTE_ARRAY"
+  );
+  assert_eq!(
+    logical,
+    Some(parquet::basic::LogicalType::Uuid),
+    "UUID must carry the Parquet UUID logical type annotation"
+  );
+}
+
+#[test]
+fn round_trip_uuid() {
+  // Functional round-trip: UUID values survive write → read as raw bytes.
+  let schema = vec![FieldSchema::Primitive {
+    name: "id".into(),
+    r#type: PrimitiveType::Uuid,
+    nullable: false,
+  }];
+  let uuid_bytes: Vec<u8> = (0..16).collect();
+  let rows = vec![vec![ColumnValue::Bytes { v: uuid_bytes }]];
+  let result = write_and_read(schema, rows.clone());
+  assert_eq!(result, rows);
+}

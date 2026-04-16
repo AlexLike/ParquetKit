@@ -569,7 +569,18 @@ private func decodeSpecialType<T: Decodable>(_ cv: ColumnValue, schema: FieldSch
         )
       }
     }
+  case .uuid:
+    // New schema type: FIXED_LEN_BYTE_ARRAY(16) with Parquet UUID logical type.
+    if T.self == UUID.self, case .bytes(let v) = cv, v.count == 16 {
+      let uuid = v.withUnsafeBytes { ptr -> UUID in
+        ptr.baseAddress!.withMemoryRebound(to: uuid_t.self, capacity: 1) { UUID(uuid: $0.pointee) }
+      }
+      return uuid as? T
+    }
   case .fixedBytes:
+    // Legacy path: FIXED_LEN_BYTE_ARRAY(16) without UUID annotation.  Files
+    // written by older versions of ParquetKit (or other tools that omit the
+    // UUID logical type) still decode correctly here.
     if T.self == UUID.self, case .bytes(let v) = cv, v.count == 16 {
       let uuid = v.withUnsafeBytes { ptr -> UUID in
         ptr.baseAddress!.withMemoryRebound(to: uuid_t.self, capacity: 1) { UUID(uuid: $0.pointee) }

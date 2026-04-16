@@ -40,6 +40,7 @@ pub fn primitive_to_data_type(pt: &PrimitiveType) -> DataType {
     // so that arrow_to_field_schema can round-trip the type correctly.
     PrimitiveType::Interval => DataType::FixedSizeBinary(12),
     PrimitiveType::Float16 => DataType::Float16,
+    PrimitiveType::Uuid => DataType::FixedSizeBinary(16),
     PrimitiveType::FixedBytes { size } => DataType::FixedSizeBinary(*size as i32),
     PrimitiveType::Decimal128 { precision, scale } => {
       DataType::Decimal128(*precision, *scale as i8)
@@ -116,6 +117,16 @@ pub fn field_schema_to_arrow(fs: &FieldSchema) -> Result<Field, ParquetError> {
           INTERVAL_META_VAL.to_string(),
         )]);
         return Ok(Field::new(name, dt, *nullable).with_metadata(meta));
+      }
+      // Tag UUID fields with the Arrow canonical extension type so that ArrowWriter
+      // emits the Parquet UUID logical type annotation.  Without this annotation,
+      // other readers (PyArrow, DuckDB, …) see opaque bytes instead of UUIDs.
+      // The `arrow_canonical_extension_types` feature on the parquet crate gates
+      // this mapping; it is enabled in Cargo.toml.
+      if matches!(r#type, PrimitiveType::Uuid) {
+        let field =
+          Field::new(name, dt, *nullable).with_extension_type(arrow_schema::extension::Uuid);
+        return Ok(field);
       }
       Ok(Field::new(name, dt, *nullable))
     }
@@ -231,6 +242,21 @@ pub fn arrow_to_field_schema(field: &Field) -> Result<FieldSchema, ParquetError>
         return Ok(FieldSchema::Primitive {
           name,
           r#type: PrimitiveType::Interval,
+          nullable,
+        });
+      }
+      // FixedSizeBinary(16) carrying the Arrow canonical UUID extension type is
+      // a Uuid column.  The extension is written by field_schema_to_arrow and
+      // is also present when reading back a file that had the Parquet UUID
+      // logical type (the parquet crate re-attaches the extension on read).
+      if let DataType::FixedSizeBinary(16) = dt
+        && field
+          .try_extension_type::<arrow_schema::extension::Uuid>()
+          .is_ok()
+      {
+        return Ok(FieldSchema::Primitive {
+          name,
+          r#type: PrimitiveType::Uuid,
           nullable,
         });
       }

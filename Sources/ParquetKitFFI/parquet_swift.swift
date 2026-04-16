@@ -1752,6 +1752,7 @@ public enum PrimitiveType: Equatable, Hashable {
      */
     case interval
     case float16
+    case uuid
     case fixedBytes(size: UInt32
     )
     case decimal128(precision: UInt8, scale: UInt8
@@ -1829,10 +1830,12 @@ public struct FfiConverterTypePrimitiveType: FfiConverterRustBuffer {
         
         case 26: return .float16
         
-        case 27: return .fixedBytes(size: try FfiConverterUInt32.read(from: &buf)
+        case 27: return .uuid
+        
+        case 28: return .fixedBytes(size: try FfiConverterUInt32.read(from: &buf)
         )
         
-        case 28: return .decimal128(precision: try FfiConverterUInt8.read(from: &buf), scale: try FfiConverterUInt8.read(from: &buf)
+        case 29: return .decimal128(precision: try FfiConverterUInt8.read(from: &buf), scale: try FfiConverterUInt8.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -1947,13 +1950,17 @@ public struct FfiConverterTypePrimitiveType: FfiConverterRustBuffer {
             writeInt(&buf, Int32(26))
         
         
-        case let .fixedBytes(size):
+        case .uuid:
             writeInt(&buf, Int32(27))
+        
+        
+        case let .fixedBytes(size):
+            writeInt(&buf, Int32(28))
             FfiConverterUInt32.write(size, into: &buf)
             
         
         case let .decimal128(precision,scale):
-            writeInt(&buf, Int32(28))
+            writeInt(&buf, Int32(29))
             FfiConverterUInt8.write(precision, into: &buf)
             FfiConverterUInt8.write(scale, into: &buf)
             

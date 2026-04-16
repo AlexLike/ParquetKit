@@ -19,6 +19,7 @@ arrow-data = "58.1.0"
 arrow-schema = "58.1.0"
 parquet = { version = "58.1.0", default-features = false, features = [
   "arrow",
+  "arrow_canonical_extension_types",
   "brotli",
   "flate2",
   "flate2-rust_backened",
