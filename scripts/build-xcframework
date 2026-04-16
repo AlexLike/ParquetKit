@@ -74,10 +74,10 @@ rm -rf "$STAGING_DIR"
 # For dev mode (single target), simple path
 if [ "${FULL:-0}" != "1" ]; then
   PLATFORM_DIR="$STAGING_DIR/macos"
-  mkdir -p "$PLATFORM_DIR/Headers"
+  mkdir -p "$PLATFORM_DIR/Headers/ParquetKitFFI"
   cp "$BUILD_DIR/$FIRST_TARGET/$PROFILE_DIR/libparquet_swift.a" "$PLATFORM_DIR/libparquet_swift.a"
-  cp "$SWIFT_DIR/parquet_swiftFFI.h" "$PLATFORM_DIR/Headers/"
-  cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$PLATFORM_DIR/Headers/module.modulemap"
+  cp "$SWIFT_DIR/parquet_swiftFFI.h" "$PLATFORM_DIR/Headers/ParquetKitFFI/"
+  cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$PLATFORM_DIR/Headers/ParquetKitFFI/module.modulemap"
 
   xcodebuild -create-xcframework \
     -library "$PLATFORM_DIR/libparquet_swift.a" \
@@ -90,7 +90,7 @@ else
     shift
     local libs="$@"
     local dir="$STAGING_DIR/$name"
-    mkdir -p "$dir/Headers"
+    mkdir -p "$dir/Headers/ParquetKitFFI"
 
     # lipo if multiple, copy if single
     local count=$(echo "$libs" | wc -w)
@@ -100,8 +100,8 @@ else
       lipo -create $libs -output "$dir/libparquet_swift.a"
     fi
 
-    cp "$SWIFT_DIR/parquet_swiftFFI.h" "$dir/Headers/"
-    cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$dir/Headers/module.modulemap"
+    cp "$SWIFT_DIR/parquet_swiftFFI.h" "$dir/Headers/ParquetKitFFI/"
+    cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$dir/Headers/ParquetKitFFI/module.modulemap"
     echo "-library $dir/libparquet_swift.a -headers $dir/Headers"
   }
 
