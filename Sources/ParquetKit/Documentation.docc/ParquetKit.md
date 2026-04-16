@@ -26,7 +26,7 @@ ParquetKit reads and writes [Apache Parquet](https://parquet.apache.org)™ file
 | `Float16` | `FLOAT16` | macOS 11+, iOS 14+ |
 | `String` | `STRING` (UTF-8) | |
 | `Data` | `BYTE_ARRAY` | |
-| `UUID` | `FIXED_LEN_BYTE_ARRAY(16)` | raw 16-byte UUID |
+| `UUID` | `FIXED_LEN_BYTE_ARRAY(16)` or `UUID` | |
 | `Optional<T>` | nullable column | any supported type |
 | `[T]` | `LIST` | any supported element type |
 | nested `@Parquet` struct | `STRUCT` | |
