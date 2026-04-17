@@ -120,13 +120,16 @@ Pull requests are welcome, including small improvements or first-time contributi
 # 1 Build the Rust driver and generate the xcframework + Swift bindings
 ./scripts/build-xcframework
 
-# 2 Auto-format Swift and Rust sources
+# 2 Switch Swift to use the fresh local xcframework
+./scripts/use-local-binary
+
+# 3 Auto-format Swift and Rust sources
 ./scripts/auto-format
 
-# 3 Run Swift and Rust tests
+# 4 Run Swift and Rust tests
 ./scripts/run-tests
 
-# 4 Build and preview DocC documentation in your browser
+# 5 Build and preview DocC documentation in your browser
 ./scripts/preview-docs
 ```
 
@@ -140,7 +143,7 @@ This will block commiting malformated source code.
 
 Use [Conventional Commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, etc.). Commit messages drive the changelog and version bumps.
 
-If you change the Rust interface, don't forget to run command 1 and commit the updated `Sources/ParquetKitFFI/parquet_swift.swift` alongside your changes.
+If you change the Rust code, don't forget to run commands 1 and 2 and commit the updated `Sources/ParquetKitFFI/parquet_swift.swift` and `Package.swift` (now containing `path:` instead of `url:checksum:` arguments) alongside your changes.
 
 ## License
 

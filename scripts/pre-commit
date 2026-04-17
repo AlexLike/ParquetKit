@@ -33,4 +33,23 @@ echo -e "\n${YELLOW}Rust fmt check…${NC}"
   || fail "Rust formatting errors. Run: cd Driver && cargo fmt --all"
 pass "Rust fmt"
 
+# ── Binary target freshness ───────────────────────────────────────────────
+echo -e "\n${YELLOW}Binary target freshness…${NC}"
+PREV=$(python3 -c "
+import re, sys
+text = open('$ROOT_DIR/Package.swift').read()
+m = re.search(r'download/(v[^/]+)/ParquetKitFFI\.xcframework\.zip', text)
+print(m.group(1) if m else '')
+")
+if [ -z "$PREV" ]; then
+  pass "Binary target (path: form — xcframework will be rebuilt on next release)"
+else
+  CHANGED=$(git -C "$ROOT_DIR" diff --name-only "${PREV}"..HEAD -- Driver/)
+  if [ -n "$CHANGED" ]; then
+    echo "$CHANGED"
+    fail "Driver/ has changed since ${PREV}. Run: bash scripts/use-local-binary"
+  fi
+  pass "Binary target (unchanged since ${PREV})"
+fi
+
 echo -e "\n${GREEN}All pre-commit checks passed.${NC}"

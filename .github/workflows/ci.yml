@@ -19,6 +19,37 @@ jobs:
       - name: Check Swift formatting
         run: swift format lint --recursive --strict Sources/ParquetKit Sources/ParquetKitMacros Tests Package.swift
 
+  # ── Binary target freshness ──────────────────────────────────────────────
+  binary-freshness:
+    name: Check binary target is not stale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail if Driver/ changed since the pinned release
+        run: |
+          PREV=$(python3 -c "
+          import re, sys
+          text = open('Package.swift').read()
+          m = re.search(r'download/(v[^/]+)/ParquetKitFFI\.xcframework\.zip', text)
+          print(m.group(1) if m else '')
+          ")
+          if [ -z "$PREV" ]; then
+            echo "Package.swift uses path: form — xcframework will be rebuilt on next release."
+            exit 0
+          fi
+          CHANGED=$(git diff --name-only "${PREV}"..HEAD -- Driver/)
+          if [ -n "$CHANGED" ]; then
+            echo "ERROR: Driver/ has changed since the pinned release ${PREV}:"
+            echo "$CHANGED"
+            echo ""
+            echo "Run 'bash scripts/use-local-binary' and commit to signal a rebuild."
+            exit 1
+          fi
+          echo "Driver/ is unchanged since ${PREV} — binary target is fresh."
+
   # ── Rust fmt / clippy / test ──────────────────────────────────────────────
   rust-checks:
     name: Rust fmt / clippy / test
@@ -131,6 +162,12 @@ jobs:
       - name: Build xcframework (cache miss)
         if: steps.xcframework-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-xcframework
+
+      # Ensure swift test uses the locally built xcframework regardless of
+      # whether Package.swift is in path: or url:/checksum: form (the latter
+      # is committed back to main after every release).
+      - name: Switch Package.swift to local binary
+        run: python3 scripts/use-local-binary
 
       - name: Cache Swift build artifacts
         uses: actions/cache@v5

@@ -29,21 +29,22 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.tag.outputs.name }}
 
-      # ── Smart rebuild: check if Driver/ changed since the previous tag ────
-      - name: Find previous release tag
-        id: prev-tag
-        run: |
-          CURRENT="${{ steps.tag.outputs.name }}"
-          PREV=$(git tag --sort=-version:refname | grep -v "^${CURRENT}$" | head -1)
-          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
-          echo "Current: ${CURRENT}, Previous: ${PREV:-<none>}"
-
-      - name: Check if Driver/ changed since previous tag
+      # ── Smart rebuild: check if Driver/ changed since the previous release ─
+      # The previous release tag is extracted from the url: field in Package.swift.
+      # If Package.swift uses path: (local binary), there is no previous URL and
+      # we must build. Committing scripts/use-local-binary output signals a rebuild.
+      - name: Check if Driver/ changed since previous release
         id: driver-changed
         run: |
-          PREV="${{ steps.prev-tag.outputs.prev_tag }}"
+          PREV=$(python3 -c "
+          import re, sys
+          text = open('Package.swift').read()
+          m = re.search(r'download/(v[^/]+)/ParquetKitFFI\.xcframework\.zip', text)
+          print(m.group(1) if m else '')
+          ")
+          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
           if [ -z "$PREV" ]; then
-            echo "First release — must build."
+            echo "No previous release URL in Package.swift — must build."
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             CHANGED=$(git diff --name-only "${PREV}".."${{ steps.tag.outputs.name }}" -- Driver/)
@@ -63,7 +64,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download "${{ steps.prev-tag.outputs.prev_tag }}" \
+          gh release download "${{ steps.driver-changed.outputs.prev_tag }}" \
             --pattern "ParquetKitFFI.xcframework.zip" \
             --dir /tmp/prev-release
           unzip /tmp/prev-release/ParquetKitFFI.xcframework.zip -d .
@@ -107,7 +108,9 @@ jobs:
           echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
           echo "Checksum: ${CHECKSUM}"
 
-      # ── Patch Package.swift with the release URL and checksum ─────────────
+      # ── Patch Package.swift, commit to main, and retag ───────────────────
+      # Handles both the path: form (local binary) and the url:/checksum: form
+      # (previous release), replacing either with the new url:/checksum: values.
       - name: Patch Package.swift
         env:
           URL: "https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.name }}/ParquetKitFFI.xcframework.zip"
@@ -118,7 +121,11 @@ jobs:
           url = os.environ["URL"]
           checksum = os.environ["CHECKSUM"]
           text = open("Package.swift").read()
-          pattern = r'\.binaryTarget\(\s*\n\s*name:\s*"ParquetKitFFIBinary",\s*\n\s*path:\s*"ParquetKitFFI\.xcframework"\s*\n\s*\)'
+          pattern = (
+            r'\.binaryTarget\(\s*\n\s*name:\s*"ParquetKitFFIBinary",\s*\n\s*'
+            r'(?:path:\s*"ParquetKitFFI\.xcframework"|url:\s*"[^"]+",\s*\n\s*checksum:\s*"[^"]+")'
+            r'\s*\n\s*\)'
+          )
           replacement = (
             '.binaryTarget(\n'
             '      name: "ParquetKitFFIBinary",\n'
@@ -134,16 +141,21 @@ jobs:
           print("Package.swift patched.")
           PYEOF
 
-      # ── Commit Package.swift in detached HEAD and force-push the tag ──────
-      # This keeps main untouched — only the tag pointer moves.
-      - name: Commit and force-push tag
+      - name: Commit to main and retag
         run: |
           TAG="${{ steps.tag.outputs.name }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Save the patched Package.swift, then apply it on main
+          cp Package.swift /tmp/Package.swift.patched
+          git checkout main
+          cp /tmp/Package.swift.patched Package.swift
+
           git add Package.swift
           git commit -m "release: attach xcframework for ${TAG} [skip ci]"
           git tag -f "${TAG}"
+          git push origin main
           git push origin "${TAG}" --force
 
       # ── Upload xcframework zip as a release asset ─────────────────────────
