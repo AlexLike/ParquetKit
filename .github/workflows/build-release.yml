@@ -45,32 +45,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          node - <<'JSEOF'
-          const fs = require('fs');
+          node --input-type=module - <<'JSEOF'
+          import { appendFileSync } from 'fs';
+          import semanticRelease from 'semantic-release';
 
-          (async () => {
-            const semanticRelease = require('semantic-release');
+          const result = await semanticRelease({ dryRun: true });
 
-            const result = await semanticRelease({ dryRun: true }).catch(err => {
-              console.error(err);
-              process.exit(1);
-            });
+          const append = line => appendFileSync(process.env.GITHUB_OUTPUT, line + '\n');
 
-            const out = process.env.GITHUB_OUTPUT;
-            const append = line => fs.appendFileSync(out, line + '\n');
-
-            if (result && result.nextRelease) {
-              const { version, notes } = result.nextRelease;
-              append('should_release=true');
-              append(`version=${version}`);
-              // Multiline output uses the heredoc delimiter syntax.
-              append('notes<<RELEASE_NOTES_EOF');
-              append(notes || '');
-              append('RELEASE_NOTES_EOF');
-            } else {
-              append('should_release=false');
-            }
-          })();
+          if (result?.nextRelease) {
+            const { version, notes } = result.nextRelease;
+            append('should_release=true');
+            append(`version=${version}`);
+            append('notes<<RELEASE_NOTES_EOF');
+            append(notes ?? '');
+            append('RELEASE_NOTES_EOF');
+          } else {
+            append('should_release=false');
+          }
           JSEOF
 
   # ── Stage 2: build (matrix) ───────────────────────────────────────────────
@@ -85,17 +77,17 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { target: aarch64-apple-darwin,         deploy_env: "MACOSX_DEPLOYMENT_TARGET=10.15" }
-          - { target: x86_64-apple-darwin,           deploy_env: "MACOSX_DEPLOYMENT_TARGET=10.15" }
-          - { target: aarch64-apple-ios,             deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.0" }
-          - { target: aarch64-apple-ios-sim,         deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.0" }
-          - { target: aarch64-apple-ios-macabi,      deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.1" }
-          - { target: aarch64-apple-tvos,            deploy_env: "TVOS_DEPLOYMENT_TARGET=13.0" }
-          - { target: aarch64-apple-tvos-sim,        deploy_env: "TVOS_DEPLOYMENT_TARGET=13.0" }
-          - { target: aarch64-apple-visionos,        deploy_env: "XROS_DEPLOYMENT_TARGET=1.0" }
-          - { target: aarch64-apple-visionos-sim,    deploy_env: "XROS_DEPLOYMENT_TARGET=1.0" }
-          - { target: aarch64-apple-watchos,         deploy_env: "WATCHOS_DEPLOYMENT_TARGET=9.0" }
-          - { target: aarch64-apple-watchos-sim,     deploy_env: "WATCHOS_DEPLOYMENT_TARGET=9.0" }
+          - { target: aarch64-apple-darwin, deploy_env: "MACOSX_DEPLOYMENT_TARGET=10.15" }
+          - { target: x86_64-apple-darwin, deploy_env: "MACOSX_DEPLOYMENT_TARGET=10.15" }
+          - { target: aarch64-apple-ios, deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-ios-sim, deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-ios-macabi, deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.1" }
+          - { target: aarch64-apple-tvos, deploy_env: "TVOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-tvos-sim, deploy_env: "TVOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-visionos, deploy_env: "XROS_DEPLOYMENT_TARGET=1.0" }
+          - { target: aarch64-apple-visionos-sim, deploy_env: "XROS_DEPLOYMENT_TARGET=1.0" }
+          - { target: aarch64-apple-watchos, deploy_env: "WATCHOS_DEPLOYMENT_TARGET=9.0" }
+          - { target: aarch64-apple-watchos-sim, deploy_env: "WATCHOS_DEPLOYMENT_TARGET=9.0" }
     defaults:
       run:
         working-directory: Driver
