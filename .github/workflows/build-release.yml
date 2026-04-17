@@ -25,11 +25,11 @@ jobs:
       version: ${{ steps.semrel.outputs.version }}
       notes: ${{ steps.semrel.outputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: lts/*
 
@@ -92,13 +92,13 @@ jobs:
       run:
         working-directory: Driver
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Cache Rust toolchain
         uses: actions/cache@v5
         with:
           path: ~/.rustup/toolchains
-          key: rustup-${{ runner.os }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
+          key: rustup-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
 
       - name: Cache cargo registry
         uses: actions/cache@v5
@@ -123,10 +123,10 @@ jobs:
         run: ${{ matrix.deploy_env }} cargo build --release --target ${{ matrix.target }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.target }}
-          path: Driver/target/${{ matrix.target }}/release/libparquet_swift.a
+          path: Driver/target/${{ matrix.target }}/release/libparquetkit_driver.a
           if-no-files-found: error
           retention-days: 1
 
@@ -146,18 +146,18 @@ jobs:
       # git operations on main are authenticated as the App throughout.
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Download all binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: binary-*
           path: /tmp/binaries
@@ -165,65 +165,89 @@ jobs:
       - name: Assemble XCFramework
         run: |
           STAGING="/tmp/xcframework-staging"
-          OUTPUT="$PWD/ParquetKitFFI.xcframework"
+          OUTPUT="$PWD/ParquetKitRustDriver.xcframework"
           HEADERS="$PWD/Sources/ParquetKitFFI"
           BINS="/tmp/binaries"
 
           rm -rf "$STAGING" "$OUTPUT"
 
-          # make_slice <name> <lib> [<lib> ...]
-          # Creates a per-platform slice directory with lipo'd library + headers.
-          make_slice() {
-            local name="$1"; shift
+          create_platform_slice() {
+            local name="$1"
+            shift
+            local libs="$@"
             local dir="$STAGING/$name"
-            mkdir -p "$dir/Headers/ParquetKitFFI"
-            if [ "$#" -eq 1 ]; then
-              cp "$1" "$dir/libparquet_swift.a"
+            mkdir -p "$dir/Headers/ParquetKitRustDriver"
+
+            # lipo if multiple, copy if single
+            local count=$(echo "$libs" | wc -w)
+            if [ "$count" -eq 1 ]; then
+              cp $libs "$dir/libparquetkit_driver.a"
             else
-              lipo -create "$@" -output "$dir/libparquet_swift.a"
+              lipo -create $libs -output "$dir/libparquetkit_driver.a"
             fi
-            cp "$HEADERS/parquet_swiftFFI.h"        "$dir/Headers/ParquetKitFFI/"
-            cp "$HEADERS/parquet_swiftFFI.modulemap" "$dir/Headers/ParquetKitFFI/module.modulemap"
+
+            cp "$HEADERS/ParquetKitRustDriver.h"        "$dir/Headers/ParquetKitRustDriver/"
+            cp "$HEADERS/ParquetKitRustDriver.modulemap" "$dir/Headers/ParquetKitRustDriver/module.modulemap"
+            echo "-library $dir/libparquetkit_driver.a -headers $dir/Headers"
           }
 
-          make_slice macos \
-            "$BINS/binary-aarch64-apple-darwin/libparquet_swift.a" \
-            "$BINS/binary-x86_64-apple-darwin/libparquet_swift.a"
-          make_slice ios        "$BINS/binary-aarch64-apple-ios/libparquet_swift.a"
-          make_slice ios-sim    "$BINS/binary-aarch64-apple-ios-sim/libparquet_swift.a"
-          make_slice catalyst   "$BINS/binary-aarch64-apple-ios-macabi/libparquet_swift.a"
-          make_slice tvos       "$BINS/binary-aarch64-apple-tvos/libparquet_swift.a"
-          make_slice tvos-sim   "$BINS/binary-aarch64-apple-tvos-sim/libparquet_swift.a"
-          make_slice xros       "$BINS/binary-aarch64-apple-visionos/libparquet_swift.a"
-          make_slice xros-sim   "$BINS/binary-aarch64-apple-visionos-sim/libparquet_swift.a"
-          make_slice watchos    "$BINS/binary-aarch64-apple-watchos/libparquet_swift.a"
-          make_slice watchos-sim "$BINS/binary-aarch64-apple-watchos-sim/libparquet_swift.a"
+          FRAMEWORK_ARGS=""
 
-          xcodebuild -create-xcframework \
-            -library "$STAGING/macos/libparquet_swift.a"       -headers "$STAGING/macos/Headers" \
-            -library "$STAGING/ios/libparquet_swift.a"         -headers "$STAGING/ios/Headers" \
-            -library "$STAGING/ios-sim/libparquet_swift.a"     -headers "$STAGING/ios-sim/Headers" \
-            -library "$STAGING/catalyst/libparquet_swift.a"    -headers "$STAGING/catalyst/Headers" \
-            -library "$STAGING/tvos/libparquet_swift.a"        -headers "$STAGING/tvos/Headers" \
-            -library "$STAGING/tvos-sim/libparquet_swift.a"    -headers "$STAGING/tvos-sim/Headers" \
-            -library "$STAGING/xros/libparquet_swift.a"        -headers "$STAGING/xros/Headers" \
-            -library "$STAGING/xros-sim/libparquet_swift.a"    -headers "$STAGING/xros-sim/Headers" \
-            -library "$STAGING/watchos/libparquet_swift.a"     -headers "$STAGING/watchos/Headers" \
-            -library "$STAGING/watchos-sim/libparquet_swift.a" -headers "$STAGING/watchos-sim/Headers" \
-            -output "$OUTPUT"
+          # macOS (two archs — lipo'd)
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice macos \
+            "$BINS/binary-aarch64-apple-darwin/libparquetkit_driver.a" \
+            "$BINS/binary-x86_64-apple-darwin/libparquetkit_driver.a")"
+
+          # iOS device
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice ios \
+            "$BINS/binary-aarch64-apple-ios/libparquetkit_driver.a")"
+
+          # iOS simulator
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice ios-simulator \
+            "$BINS/binary-aarch64-apple-ios-sim/libparquetkit_driver.a")"
+
+          # Mac Catalyst
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice maccatalyst \
+            "$BINS/binary-aarch64-apple-ios-macabi/libparquetkit_driver.a")"
+
+          # tvOS
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice tvos \
+            "$BINS/binary-aarch64-apple-tvos/libparquetkit_driver.a")"
+
+          # tvOS simulator
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice tvos-simulator \
+            "$BINS/binary-aarch64-apple-tvos-sim/libparquetkit_driver.a")"
+
+          # visionOS
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice xros \
+            "$BINS/binary-aarch64-apple-visionos/libparquetkit_driver.a")"
+
+          # visionOS simulator
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice xros-simulator \
+            "$BINS/binary-aarch64-apple-visionos-sim/libparquetkit_driver.a")"
+
+          # watchOS
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice watchos \
+            "$BINS/binary-aarch64-apple-watchos/libparquetkit_driver.a")"
+
+          # watchOS simulator
+          FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice watchos-simulator \
+            "$BINS/binary-aarch64-apple-watchos-sim/libparquetkit_driver.a")"
+
+          eval xcodebuild -create-xcframework $FRAMEWORK_ARGS -output "$OUTPUT"
 
       # ditto preserves the extended attributes xcframeworks require; plain zip -r
       # silently strips them and causes checksum mismatches on the Swift side.
       - name: Zip XCFramework
         run: |
           ditto -c -k --sequesterRsrc --keepParent \
-            ParquetKitFFI.xcframework \
-            ParquetKitFFI.xcframework.zip
+            ParquetKitRustDriver.xcframework \
+            ParquetKitRustDriver.xcframework.zip
 
       - name: Compute checksum
         id: checksum
         run: |
-          CHECKSUM=$(swift package compute-checksum ParquetKitFFI.xcframework.zip)
+          CHECKSUM=$(swift package compute-checksum ParquetKitRustDriver.xcframework.zip)
           echo "value=${CHECKSUM}" >> "$GITHUB_OUTPUT"
 
       - name: Patch Package.swift
@@ -237,20 +261,20 @@ jobs:
           version  = os.environ["VERSION"]
           checksum = os.environ["CHECKSUM"]
           repo     = os.environ["GITHUB_REPOSITORY"]
-          url      = f"https://github.com/{repo}/releases/download/v{version}/ParquetKitFFI.xcframework.zip"
+          url      = f"https://github.com/{repo}/releases/download/v{version}/ParquetKitRustDriver.xcframework.zip"
 
           text = open("Package.swift").read()
 
           # Matches both the path: form (local dev) and the url:/checksum: form
           # (previous release), replacing either with the new url:/checksum: values.
           pattern = (
-            r'\.binaryTarget\(\s*\n\s*name:\s*"ParquetKitFFIBinary",\s*\n\s*'
-            r'(?:path:\s*"ParquetKitFFI\.xcframework"|url:\s*"[^"]+",\s*\n\s*checksum:\s*"[^"]+")'
+            r'\.binaryTarget\(\s*\n\s*name:\s*"ParquetKitRustDriver",\s*\n\s*'
+            r'(?:path:\s*"ParquetKitRustDriver\.xcframework"|url:\s*"[^"]+",\s*\n\s*checksum:\s*"[^"]+")'
             r'\s*\n\s*\)'
           )
           replacement = (
             '.binaryTarget(\n'
-            '      name: "ParquetKitFFIBinary",\n'
+            '      name: "ParquetKitRustDriver",\n'
             f'      url: "{url}",\n'
             f'      checksum: "{checksum}"\n'
             '    )'
@@ -276,10 +300,10 @@ jobs:
           echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Upload XCFramework zip as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xcframework-zip
-          path: ParquetKitFFI.xcframework.zip
+          path: ParquetKitRustDriver.xcframework.zip
           retention-days: 1
 
   # ── Stage 4: release ─────────────────────────────────────────────────────
@@ -295,7 +319,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download XCFramework zip
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: xcframework-zip
 
@@ -325,7 +349,7 @@ jobs:
             --title "v${{ needs.version.outputs.version }}" \
             --notes-file /tmp/release-notes.md \
             --draft \
-            ParquetKitFFI.xcframework.zip
+            ParquetKitRustDriver.xcframework.zip
 
       - name: Publish release
         env:

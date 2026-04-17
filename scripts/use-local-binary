@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Patches Package.swift to use a local ParquetKitFFI.xcframework instead of
+Patches Package.swift to use a local ParquetKitRustDriver.xcframework instead of
 a downloaded release binary. Committing this change signals the release
 pipeline to rebuild the xcframework on the next release.
 """
@@ -10,13 +10,13 @@ PATH = "Package.swift"
 text = open(PATH).read()
 
 pattern = (
-    r'\.binaryTarget\(\s*\n\s*name:\s*"ParquetKitFFIBinary",\s*\n\s*'
+    r'\.binaryTarget\(\s*\n\s*name:\s*"ParquetKitRustDriver",\s*\n\s*'
     r'url:\s*"[^"]+",\s*\n\s*checksum:\s*"[^"]+"\s*\n\s*\)'
 )
 replacement = (
     '.binaryTarget(\n'
-    '      name: "ParquetKitFFIBinary",\n'
-    '      path: "ParquetKitFFI.xcframework"\n'
+    '      name: "ParquetKitRustDriver",\n'
+    '      path: "ParquetKitRustDriver.xcframework"\n'
     '    )'
 )
 
@@ -29,5 +29,5 @@ if n != 1:
     sys.exit(1)
 
 open(PATH, "w").write(new_text)
-print("Package.swift patched to use local ParquetKitFFI.xcframework.")
+print("Package.swift patched to use local ParquetKitRustDriver.xcframework.")
 print("Commit this change to trigger a full xcframework rebuild on the next release.")

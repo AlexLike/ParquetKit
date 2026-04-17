@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 DRIVER_DIR="$ROOT_DIR/Driver"
-OUTPUT_DIR="$ROOT_DIR/ParquetKitFFI.xcframework"
+OUTPUT_DIR="$ROOT_DIR/ParquetKitRustDriver.xcframework"
 SWIFT_DIR="$ROOT_DIR/Sources/ParquetKitFFI"
 BUILD_DIR="$DRIVER_DIR/target"
 
@@ -61,12 +61,12 @@ FIRST_TARGET=$(echo $TARGETS | awk '{print $1}')
 
 # For bindgen, we need the dylib (debug build on host)
 env "$(deployment_env "$FIRST_TARGET")" cargo build --target "$FIRST_TARGET"
-BINDGEN_LIB="$BUILD_DIR/$FIRST_TARGET/debug/libparquet_swift.dylib"
+BINDGEN_LIB="$BUILD_DIR/$FIRST_TARGET/debug/libparquetkit_driver.dylib"
 
 cargo run --bin uniffi-bindgen generate \
-  --library "$BINDGEN_LIB" \
   --language swift \
-  --out-dir "$SWIFT_DIR"
+  --out-dir "$SWIFT_DIR" \
+  "$BINDGEN_LIB"
 
 # ── Create XCFramework ──────────────────────────────────────────────
 echo "Creating XCFramework..."
@@ -77,13 +77,13 @@ rm -rf "$STAGING_DIR"
 # For dev mode (single target), simple path
 if [ "${FULL:-0}" != "1" ]; then
   PLATFORM_DIR="$STAGING_DIR/macos"
-  mkdir -p "$PLATFORM_DIR/Headers/ParquetKitFFI"
-  cp "$BUILD_DIR/$FIRST_TARGET/$PROFILE_DIR/libparquet_swift.a" "$PLATFORM_DIR/libparquet_swift.a"
-  cp "$SWIFT_DIR/parquet_swiftFFI.h" "$PLATFORM_DIR/Headers/ParquetKitFFI/"
-  cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$PLATFORM_DIR/Headers/ParquetKitFFI/module.modulemap"
+  mkdir -p "$PLATFORM_DIR/Headers/ParquetKitRustDriver"
+  cp "$BUILD_DIR/$FIRST_TARGET/$PROFILE_DIR/libparquetkit_driver.a" "$PLATFORM_DIR/libparquetkit_driver.a"
+  cp "$SWIFT_DIR/ParquetKitRustDriver.h" "$PLATFORM_DIR/Headers/ParquetKitRustDriver/"
+  cp "$SWIFT_DIR/ParquetKitRustDriver.modulemap" "$PLATFORM_DIR/Headers/ParquetKitRustDriver/module.modulemap"
 
   xcodebuild -create-xcframework \
-    -library "$PLATFORM_DIR/libparquet_swift.a" \
+    -library "$PLATFORM_DIR/libparquetkit_driver.a" \
     -headers "$PLATFORM_DIR/Headers" \
     -output "$OUTPUT_DIR"
 else
@@ -93,19 +93,19 @@ else
     shift
     local libs="$@"
     local dir="$STAGING_DIR/$name"
-    mkdir -p "$dir/Headers/ParquetKitFFI"
+    mkdir -p "$dir/Headers/ParquetKitRustDriver"
 
     # lipo if multiple, copy if single
     local count=$(echo "$libs" | wc -w)
     if [ "$count" -eq 1 ]; then
-      cp $libs "$dir/libparquet_swift.a"
+      cp $libs "$dir/libparquetkit_driver.a"
     else
-      lipo -create $libs -output "$dir/libparquet_swift.a"
+      lipo -create $libs -output "$dir/libparquetkit_driver.a"
     fi
 
-    cp "$SWIFT_DIR/parquet_swiftFFI.h" "$dir/Headers/ParquetKitFFI/"
-    cp "$SWIFT_DIR/parquet_swiftFFI.modulemap" "$dir/Headers/ParquetKitFFI/module.modulemap"
-    echo "-library $dir/libparquet_swift.a -headers $dir/Headers"
+    cp "$SWIFT_DIR/ParquetKitRustDriver.h" "$dir/Headers/ParquetKitRustDriver/"
+    cp "$SWIFT_DIR/ParquetKitRustDriver.modulemap" "$dir/Headers/ParquetKitRustDriver/module.modulemap"
+    echo "-library $dir/libparquetkit_driver.a -headers $dir/Headers"
   }
 
   FRAMEWORK_ARGS=""
@@ -113,45 +113,45 @@ else
   # macOS (may have two archs)
   MACOS_LIBS=""
   for t in aarch64-apple-darwin x86_64-apple-darwin; do
-    LIB="$BUILD_DIR/$t/$PROFILE_DIR/libparquet_swift.a"
+    LIB="$BUILD_DIR/$t/$PROFILE_DIR/libparquetkit_driver.a"
     [ -f "$LIB" ] && MACOS_LIBS="$MACOS_LIBS $LIB"
   done
   [ -n "$MACOS_LIBS" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice macos $MACOS_LIBS)"
 
   # iOS device
-  LIB="$BUILD_DIR/aarch64-apple-ios/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-ios/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice ios $LIB)"
 
   # iOS simulator
-  LIB="$BUILD_DIR/aarch64-apple-ios-sim/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-ios-sim/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice ios-simulator $LIB)"
 
   # Mac Catalyst
-  LIB="$BUILD_DIR/aarch64-apple-ios-macabi/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-ios-macabi/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice maccatalyst $LIB)"
 
   # tvOS
-  LIB="$BUILD_DIR/aarch64-apple-tvos/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-tvos/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice tvos $LIB)"
 
   # tvOS simulator
-  LIB="$BUILD_DIR/aarch64-apple-tvos-sim/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-tvos-sim/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice tvos-simulator $LIB)"
 
   # visionOS
-  LIB="$BUILD_DIR/aarch64-apple-visionos/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-visionos/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice xros $LIB)"
 
   # visionOS simulator
-  LIB="$BUILD_DIR/aarch64-apple-visionos-sim/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-visionos-sim/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice xros-simulator $LIB)"
 
   # watchOS
-  LIB="$BUILD_DIR/aarch64-apple-watchos/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-watchos/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice watchos $LIB)"
 
   # watchOS simulator
-  LIB="$BUILD_DIR/aarch64-apple-watchos-sim/$PROFILE_DIR/libparquet_swift.a"
+  LIB="$BUILD_DIR/aarch64-apple-watchos-sim/$PROFILE_DIR/libparquetkit_driver.a"
   [ -f "$LIB" ] && FRAMEWORK_ARGS="$FRAMEWORK_ARGS $(create_platform_slice watchos-simulator $LIB)"
 
   eval xcodebuild -create-xcframework $FRAMEWORK_ARGS -output "$OUTPUT_DIR"

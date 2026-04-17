@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches-ignore: [main]
   pull_request:
     branches: [main]
 
@@ -15,7 +15,7 @@ jobs:
     name: Swift formatting
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Check Swift formatting
         run: swift format lint --recursive --strict Sources/ParquetKit Sources/ParquetKitMacros Tests Package.swift
 
@@ -24,31 +24,12 @@ jobs:
     name: Check binary target is not stale
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Fail if Driver/ changed since the pinned release
-        run: |
-          PREV=$(python3 -c "
-          import re, sys
-          text = open('Package.swift').read()
-          m = re.search(r'download/(v[^/]+)/ParquetKitFFI\.xcframework\.zip', text)
-          print(m.group(1) if m else '')
-          ")
-          if [ -z "$PREV" ]; then
-            echo "Package.swift uses path: form — xcframework will be rebuilt on next release."
-            exit 0
-          fi
-          CHANGED=$(git diff --name-only "${PREV}"..HEAD -- Driver/)
-          if [ -n "$CHANGED" ]; then
-            echo "ERROR: Driver/ has changed since the pinned release ${PREV}:"
-            echo "$CHANGED"
-            echo ""
-            echo "Run 'bash scripts/use-local-binary' and commit to signal a rebuild."
-            exit 1
-          fi
-          echo "Driver/ is unchanged since ${PREV} — binary target is fresh."
+        run: bash scripts/check-binary-freshness
 
   # ── Rust fmt / clippy / test ──────────────────────────────────────────────
   rust-checks:
@@ -60,7 +41,7 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Toolchain cache: keyed on rust-toolchain.toml.
       # Caches the pinned toolchain so it doesn't need to be re-downloaded each run.
@@ -94,7 +75,7 @@ jobs:
     runs-on: macos-latest
     needs: rust-checks
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Restore Rust toolchain
         uses: actions/cache/restore@v5
@@ -112,19 +93,8 @@ jobs:
           key: rust-${{ runner.os }}-${{ hashFiles('Driver/Cargo.lock', 'Driver/Cargo.toml', 'Driver/rust-toolchain.toml') }}
           restore-keys: rust-${{ runner.os }}-
 
-      - name: Regenerate Swift bindings
-        working-directory: Driver
-        run: |
-          MACOSX_DEPLOYMENT_TARGET=10.15 cargo build --target aarch64-apple-darwin
-          cargo run --bin uniffi-bindgen generate \
-            --library target/aarch64-apple-darwin/debug/libparquet_swift.dylib \
-            --language swift \
-            --out-dir /tmp/generated-bindings
-
-      - name: Diff against committed bindings
-        run: |
-          diff /tmp/generated-bindings/parquet_swift.swift \
-               Sources/ParquetKitFFI/parquet_swift.swift
+      - name: Check Swift bindings in sync with UDL
+        run: bash scripts/check-bindings-sync
 
   # ── Build xcframework + swift test ───────────────
   swift-build-test:
@@ -132,7 +102,7 @@ jobs:
     runs-on: macos-latest
     needs: rust-checks
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Restore Rust toolchain
         uses: actions/cache/restore@v5
@@ -154,7 +124,7 @@ jobs:
         id: xcframework-cache
         uses: actions/cache@v5
         with:
-          path: ParquetKitFFI.xcframework
+          path: ParquetKitRustDriver.xcframework
           # Intentionally no restore-keys: a stale xcframework from a different
           # Driver hash must never be reused; it would mask ABI changes.
           key: xcframework-test-${{ runner.os }}-${{ hashFiles('Driver/src/**', 'Driver/Cargo.toml', 'Driver/Cargo.lock', 'Driver/rust-toolchain.toml', 'scripts/build-xcframework') }}
@@ -173,9 +143,11 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .build
-          # Key covers both SPM dependencies (Package.resolved) and the Rust driver
-          # (Driver/**) since a new xcframework invalidates previous build artifacts.
-          key: swift-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Driver/src/**', 'Driver/Cargo.toml', 'Driver/Cargo.lock', 'Driver/rust-toolchain.toml') }}
+          # Key covers SPM dependencies (Package.resolved), the Rust driver
+          # (Driver/**) since a new xcframework invalidates previous build artifacts,
+          # and the Xcode version so a runner image update doesn't restore incompatible
+          # object files from the old toolchain.
+          key: swift-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Driver/src/**', 'Driver/Cargo.toml', 'Driver/Cargo.lock', 'Driver/rust-toolchain.toml', '/Applications/Xcode.app/Contents/version.plist') }}
           restore-keys: swift-${{ runner.os }}-
 
       - name: swift test (macOS)

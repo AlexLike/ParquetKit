@@ -1,11 +1,11 @@
 [package]
-name = "parquet-swift"
+name = "parquetkit-driver"
 version = "0.0.0"
 edition = "2024"
 
 [lib]
-name = "parquet_swift"
-crate-type = ["lib", "staticlib", "cdylib"]
+name = "parquetkit_driver"
+crate-type = ["staticlib", "cdylib"]
 
 [[bin]]
 name = "uniffi-bindgen"

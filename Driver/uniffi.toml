@@ -1,0 +1,4 @@
+[bindings.swift]
+cdylib_name = "ParquetKitFFI"
+module_name = "ParquetKitFFI"
+ffi_module_name = "ParquetKitRustDriver"

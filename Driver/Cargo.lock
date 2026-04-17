@@ -730,7 +730,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "parquet-swift"
+name = "parquetkit-driver"
 version = "0.0.0"
 dependencies = [
  "arrow-array",

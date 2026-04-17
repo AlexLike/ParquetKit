@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+DRIVER_DIR="$ROOT_DIR/Driver"
+GENERATED_DIR="/tmp/generated-bindings"
+
+echo "Building Rust driver (debug)..."
+cd "$DRIVER_DIR"
+cargo build --target aarch64-apple-darwin
+
+echo "Generating Swift bindings..."
+cargo run --bin uniffi-bindgen generate \
+  --language swift \
+  --out-dir "$GENERATED_DIR" \
+  target/aarch64-apple-darwin/debug/libparquetkit_driver.dylib
+
+echo "Diffing against committed bindings..."
+diff "$GENERATED_DIR/ParquetKitFFI.swift" \
+     "$ROOT_DIR/Sources/ParquetKitFFI/ParquetKitFFI.swift"

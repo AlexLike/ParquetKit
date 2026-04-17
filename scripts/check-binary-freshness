@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+PREV=$(python3 -c "
+import re
+text = open('$ROOT_DIR/Package.swift').read()
+m = re.search(r'download/(v[^/]+)/ParquetKitRustDriver\.xcframework\.zip', text)
+print(m.group(1) if m else '')
+")
+
+if [ -z "$PREV" ]; then
+  echo "Package.swift uses path form. Binary target will be rebuilt on next release."
+  exit 0
+fi
+
+CHANGED=$(git -C "$ROOT_DIR" diff --name-only "${PREV}"..HEAD -- Driver/)
+if [ -n "$CHANGED" ]; then
+  echo "Driver/ has changed since ${PREV}:"
+  echo "$CHANGED"
+  echo ""
+  echo "Run 'bash scripts/use-local-binary' and commit to signal a rebuild."
+  exit 1
+fi
+
+echo "Driver/ is unchanged since ${PREV}. Binary target is fresh."

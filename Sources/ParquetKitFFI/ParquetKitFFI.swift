@@ -7,8 +7,8 @@ import Foundation
 // Depending on the consumer's build setup, the low-level FFI code
 // might be in a separate module, or it might be compiled inline into
 // this module. This is a bit of light hackery to work with both.
-#if canImport(parquet_swiftFFI)
-import parquet_swiftFFI
+#if canImport(ParquetKitRustDriver)
+import ParquetKitRustDriver
 #endif
 
 fileprivate extension RustBuffer {
@@ -25,13 +25,13 @@ fileprivate extension RustBuffer {
     }
 
     static func from(_ ptr: UnsafeBufferPointer<UInt8>) -> RustBuffer {
-        try! rustCall { ffi_parquet_swift_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
+        try! rustCall { ffi_parquetkit_driver_rustbuffer_from_bytes(ForeignBytes(bufferPointer: ptr), $0) }
     }
 
     // Frees the buffer in place.
     // The buffer must not be used after this is called.
     func deallocate() {
-        try! rustCall { ffi_parquet_swift_rustbuffer_free(self, $0) }
+        try! rustCall { ffi_parquetkit_driver_rustbuffer_free(self, $0) }
     }
 }
 
@@ -281,7 +281,7 @@ private func makeRustCall<T, E: Swift.Error>(
     _ callback: (UnsafeMutablePointer<RustCallStatus>) -> T,
     errorHandler: ((RustBuffer) throws -> E)?
 ) throws -> T {
-    uniffiEnsureParquetSwiftInitialized()
+    uniffiEnsureParquetkitDriverInitialized()
     var callStatus = RustCallStatus.init()
     let returnedVal = callback(&callStatus)
     try uniffiCheckCallStatus(callStatus: callStatus, errorHandler: errorHandler)
@@ -708,12 +708,12 @@ open class ReaderHandle: ReaderHandleProtocol, @unchecked Sendable {
     @_documentation(visibility: private)
 #endif
     public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_parquet_swift_fn_clone_readerhandle(self.handle, $0) }
+        return try! rustCall { uniffi_parquetkit_driver_fn_clone_readerhandle(self.handle, $0) }
     }
 public convenience init(path: String)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeParquetError_lift) {
-    uniffi_parquet_swift_fn_constructor_readerhandle_new(
+    uniffi_parquetkit_driver_fn_constructor_readerhandle_new(
         FfiConverterString.lower(path),$0
     )
 }
@@ -726,7 +726,7 @@ public convenience init(path: String)throws  {
             return
         }
 
-        try! rustCall { uniffi_parquet_swift_fn_free_readerhandle(handle, $0) }
+        try! rustCall { uniffi_parquetkit_driver_fn_free_readerhandle(handle, $0) }
     }
 
     
@@ -739,7 +739,7 @@ public convenience init(path: String)throws  {
      */
 public static func newProjected(path: String, columns: [String])throws  -> ReaderHandle  {
     return try  FfiConverterTypeReaderHandle_lift(try rustCallWithError(FfiConverterTypeParquetError_lift) {
-    uniffi_parquet_swift_fn_constructor_readerhandle_new_projected(
+    uniffi_parquetkit_driver_fn_constructor_readerhandle_new_projected(
         FfiConverterString.lower(path),
         FfiConverterSequenceString.lower(columns),$0
     )
@@ -749,7 +749,7 @@ public static func newProjected(path: String, columns: [String])throws  -> Reade
 
     
 open func close()  {try! rustCall() {
-    uniffi_parquet_swift_fn_method_readerhandle_close(
+    uniffi_parquetkit_driver_fn_method_readerhandle_close(
             self.uniffiCloneHandle(),$0
     )
 }
@@ -757,7 +757,7 @@ open func close()  {try! rustCall() {
     
 open func readRow()throws  -> [ColumnValue]?  {
     return try  FfiConverterOptionSequenceTypeColumnValue.lift(try rustCallWithError(FfiConverterTypeParquetError_lift) {
-    uniffi_parquet_swift_fn_method_readerhandle_read_row(
+    uniffi_parquetkit_driver_fn_method_readerhandle_read_row(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -765,7 +765,7 @@ open func readRow()throws  -> [ColumnValue]?  {
     
 open func schema()throws  -> [FieldSchema]  {
     return try  FfiConverterSequenceTypeFieldSchema.lift(try rustCallWithError(FfiConverterTypeParquetError_lift) {
-    uniffi_parquet_swift_fn_method_readerhandle_schema(
+    uniffi_parquetkit_driver_fn_method_readerhandle_schema(
             self.uniffiCloneHandle(),$0
     )
 })
@@ -865,12 +865,12 @@ open class WriterHandle: WriterHandleProtocol, @unchecked Sendable {
     @_documentation(visibility: private)
 #endif
     public func uniffiCloneHandle() -> UInt64 {
-        return try! rustCall { uniffi_parquet_swift_fn_clone_writerhandle(self.handle, $0) }
+        return try! rustCall { uniffi_parquetkit_driver_fn_clone_writerhandle(self.handle, $0) }
     }
 public convenience init(path: String, schema: [FieldSchema], config: WriterConfig)throws  {
     let handle =
         try rustCallWithError(FfiConverterTypeParquetError_lift) {
-    uniffi_parquet_swift_fn_constructor_writerhandle_new(
+    uniffi_parquetkit_driver_fn_constructor_writerhandle_new(
         FfiConverterString.lower(path),
         FfiConverterSequenceTypeFieldSchema.lower(schema),
         FfiConverterTypeWriterConfig_lower(config),$0
@@ -885,14 +885,14 @@ public convenience init(path: String, schema: [FieldSchema], config: WriterConfi
             return
         }
 
-        try! rustCall { uniffi_parquet_swift_fn_free_writerhandle(handle, $0) }
+        try! rustCall { uniffi_parquetkit_driver_fn_free_writerhandle(handle, $0) }
     }
 
     
 
     
 open func appendRow(values: [ColumnValue])throws   {try rustCallWithError(FfiConverterTypeParquetError_lift) {
-    uniffi_parquet_swift_fn_method_writerhandle_append_row(
+    uniffi_parquetkit_driver_fn_method_writerhandle_append_row(
             self.uniffiCloneHandle(),
         FfiConverterSequenceTypeColumnValue.lower(values),$0
     )
@@ -900,7 +900,7 @@ open func appendRow(values: [ColumnValue])throws   {try rustCallWithError(FfiCon
 }
     
 open func close()throws   {try rustCallWithError(FfiConverterTypeParquetError_lift) {
-    uniffi_parquet_swift_fn_method_writerhandle_close(
+    uniffi_parquetkit_driver_fn_method_writerhandle_close(
             self.uniffiCloneHandle(),$0
     )
 }
@@ -2191,32 +2191,32 @@ private let initializationResult: InitializationResult = {
     // Get the bindings contract version from our ComponentInterface
     let bindings_contract_version = 30
     // Get the scaffolding contract version by calling the into the dylib
-    let scaffolding_contract_version = ffi_parquet_swift_uniffi_contract_version()
+    let scaffolding_contract_version = ffi_parquetkit_driver_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_parquet_swift_checksum_method_readerhandle_close() != 24972) {
+    if (uniffi_parquetkit_driver_checksum_method_readerhandle_close() != 10175) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_parquet_swift_checksum_method_readerhandle_read_row() != 18337) {
+    if (uniffi_parquetkit_driver_checksum_method_readerhandle_read_row() != 34049) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_parquet_swift_checksum_method_readerhandle_schema() != 15662) {
+    if (uniffi_parquetkit_driver_checksum_method_readerhandle_schema() != 61691) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_parquet_swift_checksum_method_writerhandle_append_row() != 19841) {
+    if (uniffi_parquetkit_driver_checksum_method_writerhandle_append_row() != 24053) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_parquet_swift_checksum_method_writerhandle_close() != 48050) {
+    if (uniffi_parquetkit_driver_checksum_method_writerhandle_close() != 16779) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_parquet_swift_checksum_constructor_readerhandle_new() != 8918) {
+    if (uniffi_parquetkit_driver_checksum_constructor_readerhandle_new() != 12290) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_parquet_swift_checksum_constructor_readerhandle_new_projected() != 55023) {
+    if (uniffi_parquetkit_driver_checksum_constructor_readerhandle_new_projected() != 48764) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_parquet_swift_checksum_constructor_writerhandle_new() != 41269) {
+    if (uniffi_parquetkit_driver_checksum_constructor_writerhandle_new() != 26774) {
         return InitializationResult.apiChecksumMismatch
     }
 
@@ -2225,7 +2225,7 @@ private let initializationResult: InitializationResult = {
 
 // Make the ensure init function public so that other modules which have external type references to
 // our types can call it.
-public func uniffiEnsureParquetSwiftInitialized() {
+public func uniffiEnsureParquetkitDriverInitialized() {
     switch initializationResult {
     case .ok:
         break

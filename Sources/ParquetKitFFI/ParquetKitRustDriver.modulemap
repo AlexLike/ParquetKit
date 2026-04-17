@@ -1,5 +1,5 @@
-module parquet_swiftFFI {
-    header "parquet_swiftFFI.h"
+module ParquetKitRustDriver {
+    header "ParquetKitRustDriver.h"
     export *
     use "Darwin"
     use "_Builtin_stdbool"
