@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/AlexLike/ParquetKit/compare/v1.0.1...v1.0.2) (2026-04-17)
+
+
+### Bug Fixes
+
+* failing release CI pipeline; now the binary targets should appear ([cce3b4c](https://github.com/AlexLike/ParquetKit/commit/cce3b4cad609bc638e4c5d1c9a3548120aeca22a))
+
 ## [1.0.1](https://github.com/AlexLike/ParquetKit/compare/v1.0.0...v1.0.1) (2026-04-17)
 
 
