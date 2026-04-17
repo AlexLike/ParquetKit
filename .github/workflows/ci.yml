@@ -26,6 +26,8 @@ jobs:
     defaults:
       run:
         working-directory: Driver
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
     steps:
       - uses: actions/checkout@v4
 
