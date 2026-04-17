@@ -1419,6 +1419,7 @@ public enum Encoding: Equatable, Hashable {
     case deltaLengthByteArray
     case deltaByteArray
     case rleDictionary
+    case byteStreamSplit
 
 
 
@@ -1450,6 +1451,8 @@ public struct FfiConverterTypeEncoding: FfiConverterRustBuffer {
         
         case 5: return .rleDictionary
         
+        case 6: return .byteStreamSplit
+        
         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
@@ -1476,6 +1479,10 @@ public struct FfiConverterTypeEncoding: FfiConverterRustBuffer {
         
         case .rleDictionary:
             writeInt(&buf, Int32(5))
+        
+        
+        case .byteStreamSplit:
+            writeInt(&buf, Int32(6))
         
         }
     }

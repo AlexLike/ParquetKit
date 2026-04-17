@@ -9,7 +9,7 @@ import ParquetKitFFI
 
 /// Configuration for a ``ParquetWriter``.
 ///
-/// The ``default`` configuration uses Snappy compression, 4096-row groups, and
+/// The ``default`` configuration uses Zstandard compression, 4096-row groups, and
 /// dictionary encoding enabled globally.  Override individual settings or
 /// add per-column overrides via ``columnOverrides``.
 ///
@@ -20,11 +20,11 @@ import ParquetKitFFI
 ///
 /// @Snippet(path: "ParquetKit/Snippets/ParquetWriterConfigurationUsage")
 public struct ParquetWriterConfiguration: Sendable {
-  /// The default configuration: Snappy compression, 4096-row groups, dictionaries enabled.
+  /// The default configuration: Zstandard compression, 4096-row groups, dictionaries enabled.
   public static let `default` = ParquetWriterConfiguration()
 
   /// File-level compression codec applied to all columns that don't override it.
-  public var compression: Compression = .snappy
+  public var compression: Compression = .zstd(level: 3)
   /// Maximum number of rows per row group.
   public var rowGroupSize: Int = 4096
   /// Target uncompressed size in bytes for each data page.
@@ -32,7 +32,7 @@ public struct ParquetWriterConfiguration: Sendable {
   /// Whether to build dictionary pages for all columns by default.
   public var enableDictionary: Bool = true
   /// Whether to write column statistics into row-group footers.
-  public var enableStatistics: Bool = true
+  public var enableStatistics: Bool = false
   /// Per-column overrides keyed by resolved schema field name.
   ///
   /// Keys must match the resolved column names used in the schema; raw
@@ -42,11 +42,11 @@ public struct ParquetWriterConfiguration: Sendable {
 
   /// Creates a writer configuration with explicit values.
   public init(
-    compression: Compression = .snappy,
+    compression: Compression = .zstd(level: 3),
     rowGroupSize: Int = 4096,
     dataPageSize: Int = 1_048_576,
     enableDictionary: Bool = true,
-    enableStatistics: Bool = true,
+    enableStatistics: Bool = false,
     columnOverrides: [String: ColumnConfiguration] = [:]
   ) {
     self.compression = compression
@@ -114,22 +114,36 @@ public struct ParquetWriterConfiguration: Sendable {
     case deltaByteArray
     /// RLE dictionary (good for low-cardinality string or integer columns).
     case rleDictionary
+    /// Byte stream split encoding (good for floating-point data; improves compression ratio).
+    ///
+    /// Supported physical types: INT32, INT64, FLOAT, DOUBLE, FIXED_LEN_BYTE_ARRAY.
+    case byteStreamSplit
   }
 
   // MARK: - Merging
 
   /// Returns a new configuration formed by overlaying `other` on top of `self`.
   ///
-  /// File-level fields are taken from `other`.
-  /// ``columnOverrides`` are merged key-by-key: entries from `other` override
-  /// matching entries from `self`, and non-overlapping keys from both are kept.
+  /// File-level fields start from `self`; a field from `other` wins only when
+  /// it differs from the library default, indicating the caller explicitly
+  /// changed it.  ``columnOverrides`` are merged key-by-key: entries from
+  /// `other` override matching entries from `self`, and non-overlapping keys
+  /// from both are kept.
   public func merged(with other: ParquetWriterConfiguration) -> ParquetWriterConfiguration {
-    var result = other
-    var merged = self.columnOverrides
-    for (key, value) in other.columnOverrides {
-      merged[key] = value
+    let base = ParquetWriterConfiguration.default
+    var result = self
+    if other.compression != base.compression { result.compression = other.compression }
+    if other.rowGroupSize != base.rowGroupSize { result.rowGroupSize = other.rowGroupSize }
+    if other.dataPageSize != base.dataPageSize { result.dataPageSize = other.dataPageSize }
+    if other.enableDictionary != base.enableDictionary {
+      result.enableDictionary = other.enableDictionary
     }
-    result.columnOverrides = merged
+    if other.enableStatistics != base.enableStatistics {
+      result.enableStatistics = other.enableStatistics
+    }
+    for (key, value) in other.columnOverrides {
+      result.columnOverrides[key] = value
+    }
     return result
   }
 
@@ -177,6 +191,7 @@ extension ParquetWriterConfiguration.Encoding {
     case .deltaLengthByteArray: return .deltaLengthByteArray
     case .deltaByteArray: return .deltaByteArray
     case .rleDictionary: return .rleDictionary
+    case .byteStreamSplit: return .byteStreamSplit
     }
   }
 }

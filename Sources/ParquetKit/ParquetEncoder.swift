@@ -482,8 +482,7 @@ private func encodePrimitive<T>(_ value: T) -> ColumnValue? {
 /// Encodes a value as a special Parquet type guided by its `FieldSchema`.
 /// Returns `nil` when the value/schema combination is not a recognised special type.
 /// Throws when a `Duration` value cannot be encoded on the current OS.
-private func encodeSpecialType<T: Encodable>(_ value: T, schema: FieldSchema) throws -> ColumnValue?
-{
+private func encodeSpecialType<T: Encodable>(_ value: T, schema: FieldSchema) throws -> ColumnValue? {
   guard case .primitive(_, let ffiType, _) = schema._ffi else { return nil }
   let pt = PrimitiveType(ffiType)
   switch pt {

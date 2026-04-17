@@ -38,9 +38,9 @@ public final class ParquetWriter<Row: ParquetEncodable>: @unchecked Sendable {
       mergedConfig = Row.defaultWriterConfiguration
     }
 
-    let fieldNames = Set(Row.parquetSchema.map(\.fieldName))
+    let schemaByName = Dictionary(uniqueKeysWithValues: Row.parquetSchema.map { ($0.fieldName, $0) })
     for key in mergedConfig.columnOverrides.keys {
-      if !fieldNames.contains(key) {
+      if schemaByName[key] == nil {
         throw ParquetError.schema(msg: "Unknown column name in configuration: '\(key)'")
       }
     }

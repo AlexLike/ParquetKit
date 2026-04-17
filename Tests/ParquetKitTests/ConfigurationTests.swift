@@ -78,6 +78,60 @@ import Testing
       == rows)
 }
 
+// MARK: - Byte stream split encoding
+
+@Test func byteStreamSplitFloat64RoundTrip() async throws {
+  let config = ParquetWriterConfiguration(
+    columnOverrides: ["score": .init(encoding: .byteStreamSplit, enableDictionary: false)]
+  )
+  let rows = [
+    SimpleRow(id: 1, name: "a", score: 1.5),
+    SimpleRow(id: 2, name: "b", score: -3.14),
+    SimpleRow(id: 3, name: "c", score: .pi),
+  ]
+  #expect(try await writeAndRead(rows, config: config) == rows)
+}
+
+@Test func byteStreamSplitInt64RoundTrip() async throws {
+  let config = ParquetWriterConfiguration(
+    columnOverrides: ["id": .init(encoding: .byteStreamSplit, enableDictionary: false)]
+  )
+  let rows = [
+    SimpleRow(id: .min, name: "a", score: 0),
+    SimpleRow(id: 0, name: "b", score: 0),
+    SimpleRow(id: .max, name: "c", score: 0),
+  ]
+  #expect(try await writeAndRead(rows, config: config) == rows)
+}
+
+@Test func byteStreamSplitThrowsForBool() {
+  // Validation fires before any file is created, so no cleanup is needed.
+  let config = ParquetWriterConfiguration(
+    columnOverrides: ["boolVal": .init(encoding: .byteStreamSplit)]
+  )
+  #expect(throws: ParquetError.self) {
+    try ParquetWriter<AllPrimitivesRow>(url: tempFileURL(), configuration: config)
+  }
+}
+
+@Test func byteStreamSplitThrowsForString() {
+  let config = ParquetWriterConfiguration(
+    columnOverrides: ["name": .init(encoding: .byteStreamSplit)]
+  )
+  #expect(throws: ParquetError.self) {
+    try ParquetWriter<SimpleRow>(url: tempFileURL(), configuration: config)
+  }
+}
+
+@Test func byteStreamSplitThrowsForBytes() {
+  let config = ParquetWriterConfiguration(
+    columnOverrides: ["blob": .init(encoding: .byteStreamSplit)]
+  )
+  #expect(throws: ParquetError.self) {
+    try ParquetWriter<DataRow>(url: tempFileURL(), configuration: config)
+  }
+}
+
 // MARK: - Schema property accessors
 
 @Test func fieldSchemaProperties() {
