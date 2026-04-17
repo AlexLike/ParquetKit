@@ -45,6 +45,9 @@ deployment_env() {
   esac
 }
 
+# ── Ensure all required targets are installed ───────────────────────
+rustup target add $TARGETS
+
 # ── Compile ─────────────────────────────────────────────────────────
 for target in $TARGETS; do
   env_var="$(deployment_env "$target")"

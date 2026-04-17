@@ -69,6 +69,13 @@ jobs:
           unzip /tmp/prev-release/ParquetKitFFI.xcframework.zip -d .
 
       # ── Slow path: full build for all 11 Apple targets ───────────────────
+      - name: Cache Rust toolchain
+        if: steps.driver-changed.outputs.changed == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ~/.rustup/toolchains
+          key: rustup-${{ runner.os }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
+
       - name: Cache Rust (release build)
         if: steps.driver-changed.outputs.changed == 'true'
         uses: actions/cache@v5
