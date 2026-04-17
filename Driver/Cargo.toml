@@ -5,7 +5,7 @@ edition = "2024"
 
 [lib]
 name = "parquetkit_driver"
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -39,5 +39,4 @@ tempfile = "3"
 opt-level = "z"
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = "symbols"

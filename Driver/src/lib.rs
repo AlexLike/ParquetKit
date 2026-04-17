@@ -124,6 +124,7 @@ pub enum Encoding {
   DeltaLengthByteArray,
   DeltaByteArray,
   RleDictionary,
+  ByteStreamSplit,
 }
 
 // ── Writer configuration ───────────────────────────────────────────────

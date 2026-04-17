@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // This file is part of ParquetKit
 
-use parquet_swift::*;
+use parquetkit_driver::*;
 use tempfile::NamedTempFile;
 
 fn default_config() -> WriterConfig {
@@ -819,6 +819,377 @@ fn round_trip_map() {
   ];
   let result = write_and_read(schema, rows.clone());
   assert_eq!(result, rows);
+}
+
+// ── BYTE_STREAM_SPLIT encoding ──────────────────────────────────────
+
+fn bss_config(column_name: &str) -> WriterConfig {
+  WriterConfig {
+    enable_dictionary: false,
+    column_configs: vec![ColumnConfig {
+      column_name: column_name.into(),
+      compression: None,
+      encoding: Some(Encoding::ByteStreamSplit),
+      enable_dictionary: None,
+    }],
+    ..default_config()
+  }
+}
+
+#[test]
+fn round_trip_float32_byte_stream_split() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Float32,
+    nullable: false,
+  }];
+  let rows = vec![
+    vec![ColumnValue::Float32 { v: 1.5 }],
+    vec![ColumnValue::Float32 { v: -3.1 }],
+    vec![ColumnValue::Float32 { v: 0.0 }],
+  ];
+  let result = write_and_read_with_config(schema, rows.clone(), bss_config("v"));
+  assert_eq!(result, rows);
+}
+
+#[test]
+fn round_trip_float64_byte_stream_split() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Float64,
+    nullable: false,
+  }];
+  let rows = vec![
+    vec![ColumnValue::Float64 {
+      v: std::f64::consts::PI,
+    }],
+    vec![ColumnValue::Float64 { v: -1.0 }],
+    vec![ColumnValue::Float64 { v: f64::MAX }],
+  ];
+  let result = write_and_read_with_config(schema, rows.clone(), bss_config("v"));
+  assert_eq!(result, rows);
+}
+
+#[test]
+fn round_trip_int32_byte_stream_split() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Int32,
+    nullable: false,
+  }];
+  let rows = vec![
+    vec![ColumnValue::Int32 { v: i32::MIN }],
+    vec![ColumnValue::Int32 { v: 0 }],
+    vec![ColumnValue::Int32 { v: i32::MAX }],
+  ];
+  let result = write_and_read_with_config(schema, rows.clone(), bss_config("v"));
+  assert_eq!(result, rows);
+}
+
+#[test]
+fn round_trip_int64_byte_stream_split() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Int64,
+    nullable: false,
+  }];
+  let rows = vec![
+    vec![ColumnValue::Int64 { v: i64::MIN }],
+    vec![ColumnValue::Int64 { v: 0 }],
+    vec![ColumnValue::Int64 { v: i64::MAX }],
+  ];
+  let result = write_and_read_with_config(schema, rows.clone(), bss_config("v"));
+  assert_eq!(result, rows);
+}
+
+#[test]
+fn round_trip_fixed_bytes_byte_stream_split() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::FixedBytes { size: 16 },
+    nullable: false,
+  }];
+  let bytes: Vec<u8> = (0..16).collect();
+  let rows = vec![vec![ColumnValue::Bytes { v: bytes }]];
+  let result = write_and_read_with_config(schema, rows.clone(), bss_config("v"));
+  assert_eq!(result, rows);
+}
+
+#[test]
+fn byte_stream_split_incompatible_bool_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Bool,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  let path = tmp.path().to_str().unwrap().to_string();
+  let result = WriterHandle::new(path, schema, bss_config("v"));
+  match result {
+    Err(ParquetError::Schema { msg }) => {
+      assert!(msg.contains("BYTE_STREAM_SPLIT"), "unexpected msg: {msg}");
+    }
+    Err(other) => panic!("expected ParquetError::Schema, got: {other:?}"),
+    Ok(_) => panic!("expected ParquetError::Schema but got Ok"),
+  }
+}
+
+#[test]
+fn byte_stream_split_incompatible_utf8_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Utf8,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  let path = tmp.path().to_str().unwrap().to_string();
+  let result = WriterHandle::new(path, schema, bss_config("v"));
+  match result {
+    Err(ParquetError::Schema { msg }) => {
+      assert!(msg.contains("BYTE_STREAM_SPLIT"), "unexpected msg: {msg}");
+    }
+    Err(other) => panic!("expected ParquetError::Schema, got: {other:?}"),
+    Ok(_) => panic!("expected ParquetError::Schema but got Ok"),
+  }
+}
+
+#[test]
+fn byte_stream_split_incompatible_bytes_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Bytes,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  let path = tmp.path().to_str().unwrap().to_string();
+  let result = WriterHandle::new(path, schema, bss_config("v"));
+  match result {
+    Err(ParquetError::Schema { msg }) => {
+      assert!(msg.contains("BYTE_STREAM_SPLIT"), "unexpected msg: {msg}");
+    }
+    Err(other) => panic!("expected ParquetError::Schema, got: {other:?}"),
+    Ok(_) => panic!("expected ParquetError::Schema but got Ok"),
+  }
+}
+
+// ── Encoding / type validation errors ──────────────────────────────
+
+fn encoding_error_config(column_name: &str, encoding: Encoding) -> WriterConfig {
+  WriterConfig {
+    enable_dictionary: false,
+    column_configs: vec![ColumnConfig {
+      column_name: column_name.into(),
+      compression: None,
+      encoding: Some(encoding),
+      enable_dictionary: None,
+    }],
+    ..default_config()
+  }
+}
+
+fn expect_schema_error(result: Result<std::sync::Arc<WriterHandle>, ParquetError>, encoding: &str) {
+  match result {
+    Err(ParquetError::Schema { msg }) => {
+      assert!(
+        msg.contains(encoding),
+        "expected message to mention '{encoding}', got: {msg}"
+      );
+    }
+    Err(other) => panic!("expected ParquetError::Schema, got: {other:?}"),
+    Ok(_) => panic!("expected ParquetError::Schema but got Ok"),
+  }
+}
+
+// DELTA_BINARY_PACKED: only INT32 / INT64
+
+#[test]
+fn delta_binary_packed_incompatible_bool_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Bool,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaBinaryPacked),
+    ),
+    "DELTA_BINARY_PACKED",
+  );
+}
+
+#[test]
+fn delta_binary_packed_incompatible_float64_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Float64,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaBinaryPacked),
+    ),
+    "DELTA_BINARY_PACKED",
+  );
+}
+
+#[test]
+fn delta_binary_packed_incompatible_utf8_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Utf8,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaBinaryPacked),
+    ),
+    "DELTA_BINARY_PACKED",
+  );
+}
+
+// DELTA_LENGTH_BYTE_ARRAY: only BYTE_ARRAY
+
+#[test]
+fn delta_length_byte_array_incompatible_bool_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Bool,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaLengthByteArray),
+    ),
+    "DELTA_LENGTH_BYTE_ARRAY",
+  );
+}
+
+#[test]
+fn delta_length_byte_array_incompatible_int32_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Int32,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaLengthByteArray),
+    ),
+    "DELTA_LENGTH_BYTE_ARRAY",
+  );
+}
+
+#[test]
+fn delta_length_byte_array_incompatible_fixed_bytes_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::FixedBytes { size: 16 },
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaLengthByteArray),
+    ),
+    "DELTA_LENGTH_BYTE_ARRAY",
+  );
+}
+
+// DELTA_BYTE_ARRAY: BYTE_ARRAY and FIXED_LEN_BYTE_ARRAY only
+
+#[test]
+fn delta_byte_array_incompatible_bool_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Bool,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaByteArray),
+    ),
+    "DELTA_BYTE_ARRAY",
+  );
+}
+
+#[test]
+fn delta_byte_array_incompatible_int64_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Int64,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaByteArray),
+    ),
+    "DELTA_BYTE_ARRAY",
+  );
+}
+
+#[test]
+fn delta_byte_array_incompatible_float32_returns_schema_error() {
+  let schema = vec![FieldSchema::Primitive {
+    name: "v".into(),
+    r#type: PrimitiveType::Float32,
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("v", Encoding::DeltaByteArray),
+    ),
+    "DELTA_BYTE_ARRAY",
+  );
+}
+
+// Non-primitive column with a restricted encoding
+
+#[test]
+fn restricted_encoding_on_list_column_returns_schema_error() {
+  let schema = vec![FieldSchema::List {
+    name: "tags".into(),
+    fields: vec![FieldSchema::Primitive {
+      name: "item".into(),
+      r#type: PrimitiveType::Int64,
+      nullable: false,
+    }],
+    nullable: false,
+  }];
+  let tmp = NamedTempFile::new().unwrap();
+  expect_schema_error(
+    WriterHandle::new(
+      tmp.path().to_str().unwrap().into(),
+      schema,
+      encoding_error_config("tags", Encoding::DeltaBinaryPacked),
+    ),
+    "DELTA_BINARY_PACKED",
+  );
 }
 
 // ── NaN float round-trips ───────────────────────────────────────────

@@ -9,14 +9,15 @@ use std::sync::{Arc, Mutex};
 use arrow_array::RecordBatch;
 use arrow_array::builder::ArrayBuilder;
 use arrow_schema::{Field, Schema};
-use parquet::arrow::ArrowWriter;
+use parquet::arrow::{ArrowSchemaConverter, ArrowWriter};
 use parquet::basic;
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder, WriterVersion};
 
-use crate::schema::field_schema_to_arrow;
+use crate::schema::{field_schema_to_arrow, primitive_to_data_type};
 use crate::value::{append_value, make_builder};
 use crate::{
-  ColumnConfig, ColumnValue, Compression, Encoding, FieldSchema, ParquetError, WriterConfig,
+  ColumnConfig, ColumnValue, Compression, Encoding, FieldSchema, ParquetError, PrimitiveType,
+  WriterConfig,
 };
 
 #[derive(uniffi::Object)]
@@ -53,6 +54,13 @@ impl WriterHandle {
         return Err(ParquetError::Schema {
           msg: format!("unknown column name in config: '{}'", cc.column_name),
         });
+      }
+    }
+
+    // Validate encoding compatibility against the column's physical type.
+    for cc in &config.column_configs {
+      if let Some(ref enc) = cc.encoding {
+        validate_encoding_for_schema(&schema, enc, &cc.column_name)?;
       }
     }
 
@@ -166,6 +174,7 @@ fn build_writer_properties(
   schema: &Schema,
 ) -> Result<WriterProperties, ParquetError> {
   let mut builder = WriterProperties::builder()
+    .set_writer_version(WriterVersion::PARQUET_2_0)
     .set_compression(to_parquet_compression(&config.compression)?)
     .set_max_row_group_row_count(Some(config.row_group_size as usize))
     .set_data_page_size_limit(config.data_page_size as usize)
@@ -228,6 +237,129 @@ fn to_parquet_compression(c: &Compression) -> Result<basic::Compression, Parquet
   }
 }
 
+fn field_schema_name(f: &FieldSchema) -> &str {
+  match f {
+    FieldSchema::Primitive { name, .. } => name,
+    FieldSchema::List { name, .. } => name,
+    FieldSchema::Struct { name, .. } => name,
+    FieldSchema::Map { name, .. } => name,
+  }
+}
+
+/// Returns the Parquet physical type the crate uses to store this logical type,
+/// derived authoritatively via `ArrowSchemaConverter` — the same path the
+/// writer takes internally.
+fn physical_type_of(pt: &PrimitiveType) -> Result<basic::Type, ParquetError> {
+  let field = Field::new("v", primitive_to_data_type(pt), false);
+  let schema = Schema::new(vec![field]);
+  let descr = ArrowSchemaConverter::new()
+    .convert(&schema)
+    .map_err(|e| ParquetError::Schema {
+      msg: format!("could not determine Parquet physical type: {e}"),
+    })?;
+  Ok(descr.column(0).physical_type())
+}
+
+fn encoding_label(e: &Encoding) -> &'static str {
+  match e {
+    Encoding::Plain => "PLAIN",
+    Encoding::RleDictionary => "RLE_DICTIONARY",
+    Encoding::DeltaBinaryPacked => "DELTA_BINARY_PACKED",
+    Encoding::DeltaLengthByteArray => "DELTA_LENGTH_BYTE_ARRAY",
+    Encoding::DeltaByteArray => "DELTA_BYTE_ARRAY",
+    Encoding::ByteStreamSplit => "BYTE_STREAM_SPLIT",
+  }
+}
+
+/// Returns the human-readable list of allowed Parquet physical types for `encoding`.
+fn allowed_physical_types(e: &Encoding) -> &'static str {
+  match e {
+    Encoding::Plain | Encoding::RleDictionary => "all",
+    Encoding::DeltaBinaryPacked => "INT32, INT64",
+    Encoding::DeltaLengthByteArray => "BYTE_ARRAY",
+    Encoding::DeltaByteArray => "BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY",
+    Encoding::ByteStreamSplit => "INT32, INT64, FLOAT, DOUBLE, FIXED_LEN_BYTE_ARRAY",
+  }
+}
+
+/// Returns `Err` when `encoding` is incompatible with the Parquet physical type
+/// of the column named `column_name` in `schema`.
+///
+/// Restrictions (from the Parquet spec):
+///   DELTA_BINARY_PACKED   → INT32, INT64
+///   DELTA_LENGTH_BYTE_ARRAY → BYTE_ARRAY
+///   DELTA_BYTE_ARRAY      → BYTE_ARRAY, FIXED_LEN_BYTE_ARRAY
+///   BYTE_STREAM_SPLIT     → INT32, INT64, FLOAT, DOUBLE, FIXED_LEN_BYTE_ARRAY
+///   PLAIN / RLE_DICTIONARY → all types
+fn validate_encoding_for_schema(
+  schema: &[FieldSchema],
+  encoding: &Encoding,
+  column_name: &str,
+) -> Result<(), ParquetError> {
+  // PLAIN and RLE_DICTIONARY accept every type; skip the check entirely.
+  if matches!(encoding, Encoding::Plain | Encoding::RleDictionary) {
+    return Ok(());
+  }
+
+  let field = schema.iter().find(|f| field_schema_name(f) == column_name);
+
+  let primitive_type = match field {
+    None => return Ok(()), // column-name check already caught unknown names
+    Some(FieldSchema::Primitive { r#type, .. }) => r#type,
+    Some(_) => {
+      // Non-primitive columns (list/struct/map): restricted encodings don't apply.
+      return Err(ParquetError::Schema {
+        msg: format!(
+          "{} encoding cannot be applied to non-primitive column '{column_name}'",
+          encoding_label(encoding)
+        ),
+      });
+    }
+  };
+
+  let physical = physical_type_of(primitive_type)?;
+  let compatible = match encoding {
+    Encoding::Plain | Encoding::RleDictionary => true, // already returned above
+    Encoding::DeltaBinaryPacked => {
+      matches!(physical, basic::Type::INT32 | basic::Type::INT64)
+    }
+    Encoding::DeltaLengthByteArray => {
+      matches!(physical, basic::Type::BYTE_ARRAY)
+    }
+    Encoding::DeltaByteArray => {
+      matches!(
+        physical,
+        basic::Type::BYTE_ARRAY | basic::Type::FIXED_LEN_BYTE_ARRAY
+      )
+    }
+    Encoding::ByteStreamSplit => {
+      matches!(
+        physical,
+        basic::Type::INT32
+          | basic::Type::INT64
+          | basic::Type::FLOAT
+          | basic::Type::DOUBLE
+          | basic::Type::FIXED_LEN_BYTE_ARRAY
+      )
+    }
+  };
+
+  if compatible {
+    Ok(())
+  } else {
+    Err(ParquetError::Schema {
+      msg: format!(
+        "{} encoding is not supported for column '{}' \
+         (Parquet physical type: {}); supported physical types: {}",
+        encoding_label(encoding),
+        column_name,
+        physical,
+        allowed_physical_types(encoding),
+      ),
+    })
+  }
+}
+
 fn to_parquet_encoding(e: &Encoding) -> basic::Encoding {
   match e {
     Encoding::Plain => basic::Encoding::PLAIN,
@@ -235,5 +367,6 @@ fn to_parquet_encoding(e: &Encoding) -> basic::Encoding {
     Encoding::DeltaLengthByteArray => basic::Encoding::DELTA_LENGTH_BYTE_ARRAY,
     Encoding::DeltaByteArray => basic::Encoding::DELTA_BYTE_ARRAY,
     Encoding::RleDictionary => basic::Encoding::RLE_DICTIONARY,
+    Encoding::ByteStreamSplit => basic::Encoding::BYTE_STREAM_SPLIT,
   }
 }
