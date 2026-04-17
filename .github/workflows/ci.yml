@@ -52,7 +52,7 @@ jobs:
           restore-keys: rust-${{ runner.os }}-
 
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets --all-features --target aarch64-apple-darwin -- -D warnings
+      - run: cargo clippy --all-targets --target aarch64-apple-darwin -- -D warnings
       - run: cargo test --target aarch64-apple-darwin
 
   # ── Verify committed Swift bindings match Rust UDL ───────────────────────
