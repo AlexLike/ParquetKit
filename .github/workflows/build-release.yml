@@ -29,6 +29,13 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.tag.outputs.name }}
 
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       # ── Smart rebuild: check if Driver/ changed since the previous release ─
       # The previous release tag is extracted from the url: field in Package.swift.
       # If Package.swift uses path: (local binary), there is no previous URL and
@@ -142,10 +149,13 @@ jobs:
           PYEOF
 
       - name: Commit to main and retag
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           TAG="${{ steps.tag.outputs.name }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
           # Save the patched Package.swift, then apply it on main
           cp Package.swift /tmp/Package.swift.patched
