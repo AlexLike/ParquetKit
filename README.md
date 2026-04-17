@@ -52,6 +52,8 @@ targets: [
 ]
 ```
 
+Xcode users may encounter an error when compiling for the first time. To use any macros, including `@Parquet`, click the Error message and confirm the pop-up dialog.
+
 > **Note** ParquetKit uses the [official Rust `parquet` crate](https://docs.rs/crate/parquet/latest) as a backend but ships a pre-built XCFramework, so no Rust toolchain is required when consuming the package.
 
 ## Documentation
@@ -117,33 +119,38 @@ Pull requests are welcome, including small improvements or first-time contributi
 **Available Scripts**:
 
 ```bash
-# 1 Build the Rust driver and generate the xcframework + Swift bindings
-./scripts/build-xcframework
+# General Tools
 
-# 2 Switch Swift to use the fresh local xcframework
-./scripts/use-local-binary
-
-# 3 Auto-format Swift and Rust sources
+# 1 Auto-format Swift and Rust sources
 ./scripts/auto-format
 
-# 4 Run Swift and Rust tests
+# 2 Run Swift and Rust tests
 ./scripts/run-tests
 
-# 5 Build and preview DocC documentation in your browser
+# 3 Build and preview DocC documentation in your browser
 ./scripts/preview-docs
+
+# When modifying the Rust Driver
+
+# 4 Build the Rust driver and generate the xcframework + Swift bindings
+./scripts/build-xcframework
+
+# 5 Tell Swift to use the fresh local xcframework instead of the old and prebuilt one
+./scripts/use-local-binary
+
+# 6 Check whether the Swift bindings are up-to-date
+./scripts/check-bindings-sync
 ```
 
-To catch formatting issues before they reach CI, install the pre-commit hook once via
+To catch formatting or binary recompilation issues before they reach CI, install the pre-commit hook once via
 
 ```bash
 ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 ```
 
-This will block commiting malformated source code.
+This will block commiting malformated source code or source code that references an old build of the Rust driver.
 
 Use [Conventional Commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, etc.). Commit messages drive the changelog and version bumps.
-
-If you change the Rust code, don't forget to run commands 1 and 2 and commit the updated `Sources/ParquetKitFFI/parquet_swift.swift` and `Package.swift` (now containing `path:` instead of `url:checksum:` arguments) alongside your changes.
 
 ## License
 
