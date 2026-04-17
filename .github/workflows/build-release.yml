@@ -1,34 +1,157 @@
-name: Build Release
+name: Release
 
 on:
-  release:
-    types: [created]
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Release tag to build (e.g. v1.2.3)"
-        required: true
-        type: string
+  push:
+    branches: [main]
+
+# Prevent concurrent releases; queue rather than cancel so no push is skipped.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
+# ── Stage 1: version ─────────────────────────────────────────────────────────
+# Dry-run semantic-release to decide whether a release is warranted and, if so,
+# compute the next version and generate the release notes.  Nothing is tagged or
+# published here.
 jobs:
-  build-and-upload:
-    name: Build xcframework and attach to release
-    runs-on: macos-latest
+  version:
+    name: Compute next version
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.semrel.outputs.should_release }}
+      version: ${{ steps.semrel.outputs.version }}
+      notes: ${{ steps.semrel.outputs.notes }}
     steps:
-      - name: Resolve tag name
-        id: tag
-        run: |
-          TAG="${{ inputs.tag_name || github.event.release.tag_name }}"
-          echo "name=${TAG}" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ steps.tag.outputs.name }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Install semantic-release
+        run: |
+          npm install --no-save \
+            semantic-release \
+            @semantic-release/commit-analyzer \
+            @semantic-release/release-notes-generator
+
+      - name: Dry-run semantic-release
+        id: semrel
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node - <<'JSEOF'
+          const fs = require('fs');
+
+          (async () => {
+            const semanticRelease = require('semantic-release');
+
+            const result = await semanticRelease({ dryRun: true }).catch(err => {
+              console.error(err);
+              process.exit(1);
+            });
+
+            const out = process.env.GITHUB_OUTPUT;
+            const append = line => fs.appendFileSync(out, line + '\n');
+
+            if (result && result.nextRelease) {
+              const { version, notes } = result.nextRelease;
+              append('should_release=true');
+              append(`version=${version}`);
+              // Multiline output uses the heredoc delimiter syntax.
+              append('notes<<RELEASE_NOTES_EOF');
+              append(notes || '');
+              append('RELEASE_NOTES_EOF');
+            } else {
+              append('should_release=false');
+            }
+          })();
+          JSEOF
+
+  # ── Stage 2: build (matrix) ───────────────────────────────────────────────
+  # Build all 11 Apple Rust targets in parallel.  Each job uploads its static
+  # library as a workflow artifact consumed by the patch stage.
+  build:
+    name: Build ${{ matrix.target }}
+    needs: version
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: macos-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin,         deploy_env: "MACOSX_DEPLOYMENT_TARGET=10.15" }
+          - { target: x86_64-apple-darwin,           deploy_env: "MACOSX_DEPLOYMENT_TARGET=10.15" }
+          - { target: aarch64-apple-ios,             deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-ios-sim,         deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-ios-macabi,      deploy_env: "IPHONEOS_DEPLOYMENT_TARGET=13.1" }
+          - { target: aarch64-apple-tvos,            deploy_env: "TVOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-tvos-sim,        deploy_env: "TVOS_DEPLOYMENT_TARGET=13.0" }
+          - { target: aarch64-apple-visionos,        deploy_env: "XROS_DEPLOYMENT_TARGET=1.0" }
+          - { target: aarch64-apple-visionos-sim,    deploy_env: "XROS_DEPLOYMENT_TARGET=1.0" }
+          - { target: aarch64-apple-watchos,         deploy_env: "WATCHOS_DEPLOYMENT_TARGET=9.0" }
+          - { target: aarch64-apple-watchos-sim,     deploy_env: "WATCHOS_DEPLOYMENT_TARGET=9.0" }
+    defaults:
+      run:
+        working-directory: Driver
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v5
+        with:
+          path: ~/.rustup/toolchains
+          key: rustup-${{ runner.os }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ hashFiles('Driver/Cargo.lock') }}
+          restore-keys: cargo-registry-
+
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v5
+        with:
+          path: Driver/target/${{ matrix.target }}
+          key: rust-release-${{ matrix.target }}-${{ hashFiles('Driver/Cargo.lock', 'Driver/Cargo.toml', 'Driver/rust-toolchain.toml', 'Driver/src/**') }}
+          restore-keys: rust-release-${{ matrix.target }}-
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: ${{ matrix.deploy_env }} cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: Driver/target/${{ matrix.target }}/release/libparquet_swift.a
+          if-no-files-found: error
+          retention-days: 1
+
+  # ── Stage 3: patch ───────────────────────────────────────────────────────
+  # Download all binaries, assemble the XCFramework, patch Package.swift with
+  # the release URL + checksum, push to main, and surface the new HEAD SHA.
+  patch:
+    name: Assemble XCFramework and patch Package.swift
+    needs: [version, build]
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: macos-latest
+    outputs:
+      head_sha: ${{ steps.push.outputs.head_sha }}
+    steps:
+      # Generate the App token first so checkout can use it directly.
+      # This avoids a manual `git remote set-url` later and ensures all
+      # git operations on main are authenticated as the App throughout.
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -36,73 +159,70 @@ jobs:
           app-id: ${{ secrets.RELEASE_APP_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
-      # ── Smart rebuild: check if Driver/ changed since the previous release ─
-      # The previous release tag is extracted from the url: field in Package.swift.
-      # If Package.swift uses path: (local binary), there is no previous URL and
-      # we must build. Committing scripts/use-local-binary output signals a rebuild.
-      - name: Check if Driver/ changed since previous release
-        id: driver-changed
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: /tmp/binaries
+
+      - name: Assemble XCFramework
         run: |
-          PREV=$(python3 -c "
-          import re, sys
-          text = open('Package.swift').read()
-          m = re.search(r'download/(v[^/]+)/ParquetKitFFI\.xcframework\.zip', text)
-          print(m.group(1) if m else '')
-          ")
-          echo "prev_tag=${PREV}" >> "$GITHUB_OUTPUT"
-          if [ -z "$PREV" ]; then
-            echo "No previous release URL in Package.swift — must build."
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            CHANGED=$(git diff --name-only "${PREV}".."${{ steps.tag.outputs.name }}" -- Driver/)
-            if [ -n "$CHANGED" ]; then
-              echo "Driver/ changed since ${PREV}:"
-              echo "$CHANGED"
-              echo "changed=true" >> "$GITHUB_OUTPUT"
+          STAGING="/tmp/xcframework-staging"
+          OUTPUT="$PWD/ParquetKitFFI.xcframework"
+          HEADERS="$PWD/Sources/ParquetKitFFI"
+          BINS="/tmp/binaries"
+
+          rm -rf "$STAGING" "$OUTPUT"
+
+          # make_slice <name> <lib> [<lib> ...]
+          # Creates a per-platform slice directory with lipo'd library + headers.
+          make_slice() {
+            local name="$1"; shift
+            local dir="$STAGING/$name"
+            mkdir -p "$dir/Headers/ParquetKitFFI"
+            if [ "$#" -eq 1 ]; then
+              cp "$1" "$dir/libparquet_swift.a"
             else
-              echo "Driver/ unchanged since ${PREV} — reusing previous xcframework."
-              echo "changed=false" >> "$GITHUB_OUTPUT"
+              lipo -create "$@" -output "$dir/libparquet_swift.a"
             fi
-          fi
+            cp "$HEADERS/parquet_swiftFFI.h"        "$dir/Headers/ParquetKitFFI/"
+            cp "$HEADERS/parquet_swiftFFI.modulemap" "$dir/Headers/ParquetKitFFI/module.modulemap"
+          }
 
-      # ── Fast path: reuse xcframework from the previous release ───────────
-      - name: Download xcframework from previous release
-        if: steps.driver-changed.outputs.changed == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download "${{ steps.driver-changed.outputs.prev_tag }}" \
-            --pattern "ParquetKitFFI.xcframework.zip" \
-            --dir /tmp/prev-release
-          unzip /tmp/prev-release/ParquetKitFFI.xcframework.zip -d .
+          make_slice macos \
+            "$BINS/binary-aarch64-apple-darwin/libparquet_swift.a" \
+            "$BINS/binary-x86_64-apple-darwin/libparquet_swift.a"
+          make_slice ios        "$BINS/binary-aarch64-apple-ios/libparquet_swift.a"
+          make_slice ios-sim    "$BINS/binary-aarch64-apple-ios-sim/libparquet_swift.a"
+          make_slice catalyst   "$BINS/binary-aarch64-apple-ios-macabi/libparquet_swift.a"
+          make_slice tvos       "$BINS/binary-aarch64-apple-tvos/libparquet_swift.a"
+          make_slice tvos-sim   "$BINS/binary-aarch64-apple-tvos-sim/libparquet_swift.a"
+          make_slice xros       "$BINS/binary-aarch64-apple-visionos/libparquet_swift.a"
+          make_slice xros-sim   "$BINS/binary-aarch64-apple-visionos-sim/libparquet_swift.a"
+          make_slice watchos    "$BINS/binary-aarch64-apple-watchos/libparquet_swift.a"
+          make_slice watchos-sim "$BINS/binary-aarch64-apple-watchos-sim/libparquet_swift.a"
 
-      # ── Slow path: full build for all 11 Apple targets ───────────────────
-      - name: Cache Rust toolchain
-        if: steps.driver-changed.outputs.changed == 'true'
-        uses: actions/cache@v5
-        with:
-          path: ~/.rustup/toolchains
-          key: rustup-${{ runner.os }}-${{ hashFiles('Driver/rust-toolchain.toml') }}
+          xcodebuild -create-xcframework \
+            -library "$STAGING/macos/libparquet_swift.a"       -headers "$STAGING/macos/Headers" \
+            -library "$STAGING/ios/libparquet_swift.a"         -headers "$STAGING/ios/Headers" \
+            -library "$STAGING/ios-sim/libparquet_swift.a"     -headers "$STAGING/ios-sim/Headers" \
+            -library "$STAGING/catalyst/libparquet_swift.a"    -headers "$STAGING/catalyst/Headers" \
+            -library "$STAGING/tvos/libparquet_swift.a"        -headers "$STAGING/tvos/Headers" \
+            -library "$STAGING/tvos-sim/libparquet_swift.a"    -headers "$STAGING/tvos-sim/Headers" \
+            -library "$STAGING/xros/libparquet_swift.a"        -headers "$STAGING/xros/Headers" \
+            -library "$STAGING/xros-sim/libparquet_swift.a"    -headers "$STAGING/xros-sim/Headers" \
+            -library "$STAGING/watchos/libparquet_swift.a"     -headers "$STAGING/watchos/Headers" \
+            -library "$STAGING/watchos-sim/libparquet_swift.a" -headers "$STAGING/watchos-sim/Headers" \
+            -output "$OUTPUT"
 
-      - name: Cache Rust (release build)
-        if: steps.driver-changed.outputs.changed == 'true'
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            Driver/target
-          key: rust-release-${{ runner.os }}-${{ hashFiles('Driver/Cargo.lock', 'Driver/Cargo.toml', 'Driver/rust-toolchain.toml') }}
-          restore-keys: rust-release-${{ runner.os }}-
-
-      - name: Build xcframework (FULL=1, all 11 Apple targets)
-        if: steps.driver-changed.outputs.changed == 'true'
-        run: FULL=1 bash scripts/build-xcframework release
-
-      # ── Package ───────────────────────────────────────────────────────────
-      - name: Zip xcframework
-        # ditto preserves extended attributes required by xcframeworks;
-        # plain zip -r silently strips them, causing checksum mismatches.
+      # ditto preserves the extended attributes xcframeworks require; plain zip -r
+      # silently strips them and causes checksum mismatches on the Swift side.
+      - name: Zip XCFramework
         run: |
           ditto -c -k --sequesterRsrc --keepParent \
             ParquetKitFFI.xcframework \
@@ -112,22 +232,25 @@ jobs:
         id: checksum
         run: |
           CHECKSUM=$(swift package compute-checksum ParquetKitFFI.xcframework.zip)
-          echo "checksum=${CHECKSUM}" >> "$GITHUB_OUTPUT"
-          echo "Checksum: ${CHECKSUM}"
+          echo "value=${CHECKSUM}" >> "$GITHUB_OUTPUT"
 
-      # ── Patch Package.swift, commit to main, and retag ───────────────────
-      # Handles both the path: form (local binary) and the url:/checksum: form
-      # (previous release), replacing either with the new url:/checksum: values.
       - name: Patch Package.swift
         env:
-          URL: "https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.name }}/ParquetKitFFI.xcframework.zip"
-          CHECKSUM: "${{ steps.checksum.outputs.checksum }}"
+          VERSION: ${{ needs.version.outputs.version }}
+          CHECKSUM: ${{ steps.checksum.outputs.value }}
         run: |
           python3 - <<'PYEOF'
           import re, os, sys
-          url = os.environ["URL"]
+
+          version  = os.environ["VERSION"]
           checksum = os.environ["CHECKSUM"]
+          repo     = os.environ["GITHUB_REPOSITORY"]
+          url      = f"https://github.com/{repo}/releases/download/v{version}/ParquetKitFFI.xcframework.zip"
+
           text = open("Package.swift").read()
+
+          # Matches both the path: form (local dev) and the url:/checksum: form
+          # (previous release), replacing either with the new url:/checksum: values.
           pattern = (
             r'\.binaryTarget\(\s*\n\s*name:\s*"ParquetKitFFIBinary",\s*\n\s*'
             r'(?:path:\s*"ParquetKitFFI\.xcframework"|url:\s*"[^"]+",\s*\n\s*checksum:\s*"[^"]+")'
@@ -142,37 +265,80 @@ jobs:
           )
           new_text, n = re.subn(pattern, replacement, text)
           if n != 1:
-            print(f"ERROR: Expected 1 match, got {n}", file=sys.stderr)
+            print(f"ERROR: expected 1 match, got {n}", file=sys.stderr)
             sys.exit(1)
           open("Package.swift", "w").write(new_text)
-          print("Package.swift patched.")
+          print(f"Patched Package.swift — url: {url}")
           PYEOF
 
-      - name: Commit to main and retag
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+      - name: Commit and push to main
+        id: push
         run: |
-          TAG="${{ steps.tag.outputs.name }}"
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          # Save the patched Package.swift, then apply it on main
-          cp Package.swift /tmp/Package.swift.patched
-          git checkout main
-          cp /tmp/Package.swift.patched Package.swift
 
           git add Package.swift
-          git commit -m "release: attach xcframework for ${TAG} [skip ci]"
-          git tag -f "${TAG}"
+          git commit -m "release: patch Package.swift for v${{ needs.version.outputs.version }} [skip ci]"
           git push origin main
-          git push origin "${TAG}" --force
 
-      # ── Upload xcframework zip as a release asset ─────────────────────────
-      - name: Upload xcframework to GitHub Release
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload XCFramework zip as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcframework-zip
+          path: ParquetKitFFI.xcframework.zip
+          retention-days: 1
+
+  # ── Stage 4: release ─────────────────────────────────────────────────────
+  # Create the git tag on the patched HEAD, open a draft release, attach the
+  # XCFramework zip, then publish.  Using a draft ensures assets are present
+  # before the release becomes visible to consumers.
+  # GITHUB_TOKEN is sufficient here — tag + release creation are plain
+  # contents:write operations, no branch-protection bypass required.
+  release:
+    name: Publish release
+    needs: [version, patch]
+    if: needs.version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download XCFramework zip
+        uses: actions/download-artifact@v4
+        with:
+          name: xcframework-zip
+
+      - name: Create tag on patched HEAD
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v${{ needs.version.outputs.version }}
+          SHA: ${{ needs.patch.outputs.head_sha }}
+        run: |
+          curl -sf -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/git/refs" \
+            -d "{\"ref\":\"refs/tags/${TAG}\",\"sha\":\"${SHA}\"}"
+
+      - name: Write release notes to file
+        env:
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: printf '%s' "$NOTES" > /tmp/release-notes.md
+
+      - name: Create draft release with assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ steps.tag.outputs.name }}" \
-            ParquetKitFFI.xcframework.zip \
-            --clobber
+          gh release create "v${{ needs.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --title "v${{ needs.version.outputs.version }}" \
+            --notes-file /tmp/release-notes.md \
+            --draft \
+            ParquetKitFFI.xcframework.zip
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "v${{ needs.version.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --draft=false
