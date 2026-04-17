@@ -1,3 +1,5 @@
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FAlexLike%2FParquetKit%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/AlexLike/ParquetKit)
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FAlexLike%2FParquetKit%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/AlexLike/ParquetKit)
 ![CI](https://github.com/alexlike/ParquetKit/actions/workflows/ci.yml/badge.svg?label=test)
 
 <img src="./logo.svg" alt="Logo" width="64" />
@@ -37,10 +39,6 @@ for try await reading in try ParquetReader<SensorReading>(url: fileURL) {
 }
 ```
 
-## API Docs
-
-Comprehensive API documentation and examples are available at [swiftpackageindex.com/alexlike/ParquetKit](https://swiftpackageindex.com/alexlike/ParquetKit/documentation/parquetkit).
-
 ## Installation
 
 Add ParquetKit to your `Package.swift`:
@@ -56,6 +54,60 @@ targets: [
 
 > **Note** ParquetKit uses the [official Rust `parquet` crate](https://docs.rs/crate/parquet/latest) as a backend but ships a pre-built XCFramework, so no Rust toolchain is required when consuming the package.
 
+## Documentation
+
+Comprehensive API documentation and examples are available at [SwiftPackageIndex/ParquetKit](https://swiftpackageindex.com/alexlike/ParquetKit/documentation/parquetkit).
+
+### Supported types
+
+| Swift type                                         | Parquet type                         | Notes                                  |
+| -------------------------------------------------- | ------------------------------------ | -------------------------------------- |
+| `Bool`                                             | `BOOLEAN`                            |                                        |
+| `Int8`                                             | `INT8`                               |                                        |
+| `Int16`                                            | `INT16`                              |                                        |
+| `Int32`                                            | `INT32`                              |                                        |
+| `Int64`                                            | `INT64`                              |                                        |
+| `UInt8`                                            | `UINT8`                              |                                        |
+| `UInt16`                                           | `UINT16`                             |                                        |
+| `UInt32`                                           | `UINT32`                             |                                        |
+| `UInt64`                                           | `UINT64`                             |                                        |
+| `Float`                                            | `FLOAT`                              |                                        |
+| `Double`                                           | `DOUBLE`                             |                                        |
+| `Float16`                                          | `FLOAT16`                            | macOS 11+, iOS 14+                     |
+| `String`                                           | `STRING` (UTF-8)                     |                                        |
+| `Data`                                             | `BYTE_ARRAY`                         |                                        |
+| `UUID`                                             | `FIXED_LEN_BYTE_ARRAY(16)` or `UUID` |                                        |
+| `Optional<T>`                                      | nullable column                      | any supported type                     |
+| `[T]`                                              | `LIST`                               | any supported element type             |
+| nested `@Parquet` struct                           | `STRUCT`                             |                                        |
+| `ParquetDate`                                      | `DATE`                               | days since Unix epoch                  |
+| `ParquetTimestamp` + `@ParquetTimestamp(unit:)`    | `TIMESTAMP`                          | millis/micros/nanos, UTC or wall-clock |
+| `ParquetTime` + `@ParquetTime(unit:)`              | `TIME`                               | defaults to microseconds               |
+| `Decimal128` + `@ParquetDecimal(precision:scale:)` | `DECIMAL`                            |                                        |
+| `ParquetInterval`                                  | `INTERVAL`                           | months, days, milliseconds             |
+| `Duration`                                         | `DURATION` (nanoseconds)             | Swift Concurrency `Duration`           |
+
+### Encodings
+
+| Encoding                | Best for                                          |
+| ----------------------- | ------------------------------------------------- |
+| `.plain`                | Default                                           |
+| `.deltaBinaryPacked`    | Sorted or slowly-changing integers and timestamps |
+| `.deltaLengthByteArray` | Variable-length strings with similar lengths      |
+| `.deltaByteArray`       | Strings with shared prefixes (URLs, paths)        |
+| `.rleDictionary`        | Low-cardinality string or integer columns         |
+
+### Compression
+
+| Codec             | Notes                               |
+| ----------------- | ----------------------------------- |
+| `.none`           | No compression                      |
+| `.snappy`         | Default; fast                       |
+| `.lz4`            | Lower ratio than Snappy; very fast  |
+| `.gzip(level:)`   | Levels 1–9                          |
+| `.zstd(level:)`   | Levels 1–22; high compression ratio |
+| `.brotli(level:)` | Levels 0–11                         |
+
 ## Contributing
 
 Pull requests are welcome, including small improvements or first-time contributions. :)
@@ -65,14 +117,17 @@ Pull requests are welcome, including small improvements or first-time contributi
 **Available Scripts**:
 
 ```bash
-# Build the Rust driver and generate the xcframework + Swift bindings
+# 1 Build the Rust driver and generate the xcframework + Swift bindings
 ./scripts/build-xcframework
 
-# Auto-format Swift and Rust sources
+# 2 Auto-format Swift and Rust sources
 ./scripts/auto-format
 
-# Run Swift and Rust tests
+# 3 Run Swift and Rust tests
 ./scripts/run-tests
+
+# 4 Build and preview DocC documentation in your browser
+./scripts/preview-docs
 ```
 
 To catch formatting issues before they reach CI, install the pre-commit hook once via
@@ -85,7 +140,7 @@ This will block commiting malformated source code.
 
 Use [Conventional Commits](https://www.conventionalcommits.org) (`feat:`, `fix:`, etc.). Commit messages drive the changelog and version bumps.
 
-If you change the Rust interface, re-run step 1 and commit the updated `Sources/ParquetKitFFI/parquet_swift.swift` alongside your changes.
+If you change the Rust interface, don't forget to run command 1 and commit the updated `Sources/ParquetKitFFI/parquet_swift.swift` alongside your changes.
 
 ## License
 

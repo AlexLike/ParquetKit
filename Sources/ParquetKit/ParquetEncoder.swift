@@ -524,6 +524,11 @@ private func encodeSpecialType<T: Encodable>(_ value: T, schema: FieldSchema) th
     } else {
       if let v = value as? Float { return .float16(v: v) }
     }
+  case .uuid:
+    if let uuid = value as? UUID {
+      return .bytes(v: withUnsafeBytes(of: uuid.uuid) { Data($0) })
+    }
+    if let data = value as? Data { return .bytes(v: data) }
   case .fixedBytes:
     if let uuid = value as? UUID {
       return .bytes(v: withUnsafeBytes(of: uuid.uuid) { Data($0) })

@@ -45,7 +45,9 @@ public enum PrimitiveType: Sendable, Equatable, Hashable {
   case interval
   /// Half-precision (16-bit) floating-point.
   case float16
-  /// Fixed-length byte array of `size` bytes.  Use for `UUID` (size 16).
+  /// UUID stored as `FIXED_LEN_BYTE_ARRAY(16)` with the Parquet UUID logical type.
+  case uuid
+  /// Fixed-length byte array of `size` bytes.
   case fixedBytes(size: UInt32)
   /// 128-bit decimal with explicit precision and scale.
   case decimal128(precision: UInt8, scale: UInt8)
@@ -82,6 +84,7 @@ extension PrimitiveType {
     case .durationNs: self = .durationNs
     case .interval: self = .interval
     case .float16: self = .float16
+    case .uuid: self = .uuid
     case .fixedBytes(let size): self = .fixedBytes(size: size)
     case .decimal128(let p, let s): self = .decimal128(precision: p, scale: s)
     }
@@ -115,6 +118,7 @@ extension PrimitiveType {
     case .durationNs: return .durationNs
     case .interval: return .interval
     case .float16: return .float16
+    case .uuid: return .uuid
     case .fixedBytes(let size): return .fixedBytes(size: size)
     case .decimal128(let p, let s): return .decimal128(precision: p, scale: s)
     }
