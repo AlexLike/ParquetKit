@@ -21,8 +21,8 @@ let package = Package(
   targets: [
     .binaryTarget(
       name: "ParquetKitRustDriver",
-      url: "https://github.com/AlexLike/ParquetKit/releases/download/v1.1.0/ParquetKitRustDriver.xcframework.zip",
-      checksum: "3a42cc76b7dd65c49288b8a48bce0ed544cd526c74602a8436cd0b407d350f10"
+      url: "https://github.com/AlexLike/ParquetKit/releases/download/v1.1.1/ParquetKitRustDriver.xcframework.zip",
+      checksum: "913670be5e0d42f6fa186e8bc0e33782fff5d9c35556f2b73f8b5527b2d1bd34"
     ),
     .target(
       name: "ParquetKitFFI",
