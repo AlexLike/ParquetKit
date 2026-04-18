@@ -91,24 +91,25 @@ Comprehensive API documentation and examples are available at [SwiftPackageIndex
 
 ### Encodings
 
-| Encoding                | Best for                                          |
-| ----------------------- | ------------------------------------------------- |
-| `.plain`                | Default                                           |
-| `.deltaBinaryPacked`    | Sorted or slowly-changing integers and timestamps |
-| `.deltaLengthByteArray` | Variable-length strings with similar lengths      |
-| `.deltaByteArray`       | Strings with shared prefixes (URLs, paths)        |
-| `.rleDictionary`        | Low-cardinality string or integer columns         |
+| Encoding                | Best for                                                         |
+| ----------------------- | ---------------------------------------------------------------- |
+| `.plain`                | Default                                                          |
+| `.deltaBinaryPacked`    | Sorted or slowly-changing integers and timestamps                |
+| `.deltaLengthByteArray` | Variable-length strings with similar lengths                     |
+| `.deltaByteArray`       | Strings with shared prefixes (URLs, paths)                       |
+| `.rleDictionary`        | Low-cardinality string or integer columns                        |
+| `.byteStreamSplit`      | Floating-point and fixed-width columns; improves codec ratio     |
 
 ### Compression
 
-| Codec             | Notes                               |
-| ----------------- | ----------------------------------- |
-| `.none`           | No compression                      |
-| `.snappy`         | Default; fast                       |
-| `.lz4`            | Lower ratio than Snappy; very fast  |
-| `.gzip(level:)`   | Levels 1–9                          |
-| `.zstd(level:)`   | Levels 1–22; high compression ratio |
-| `.brotli(level:)` | Levels 0–11                         |
+| Codec             | Notes                                        |
+| ----------------- | -------------------------------------------- |
+| `.none`           | No compression                               |
+| `.snappy`         | Fast                                         |
+| `.lz4`            | Lower ratio than Snappy; very fast           |
+| `.gzip(level:)`   | Levels 1–9                                   |
+| `.zstd(level:)`   | Default (level 3); levels 1–22; high ratio   |
+| `.brotli(level:)` | Levels 0–11                                  |
 
 ## Contributing
 
