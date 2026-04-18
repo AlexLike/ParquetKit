@@ -173,3 +173,6 @@ pub enum ColumnValue {
 // Re-export handle types
 pub use reader::ReaderHandle;
 pub use writer::WriterHandle;
+
+#[cfg(test)]
+mod tests;

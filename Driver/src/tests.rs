@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // This file is part of ParquetKit
 
-use parquetkit_driver::*;
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::expect_used)]
+#![allow(clippy::panic)]
+
+use crate::*;
 use tempfile::NamedTempFile;
 
 fn default_config() -> WriterConfig {

@@ -5,7 +5,7 @@ edition = "2024"
 
 [lib]
 name = "parquetkit_driver"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["staticlib", "cdylib"]
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -13,21 +13,18 @@ path = "src/bin/uniffi_bindgen.rs"
 
 [dependencies]
 arrow-array = "58.1.0"
-arrow-buffer = "58.1.0"
 half = "2.1"
-arrow-data = "58.1.0"
 arrow-schema = "58.1.0"
 parquet = { version = "58.1.0", default-features = false, features = [
   "arrow",
   "arrow_canonical_extension_types",
   "brotli",
   "flate2",
-  "flate2-rust_backened",
+  "flate2-zlib-rs",
   "lz4",
   "zstd",
   "snap",
   "crc",
-  "simdutf8",
 ] }
 thiserror = "2"
 uniffi = { version = "0.31.0", features = ["cli"] }
@@ -36,7 +33,7 @@ uniffi = { version = "0.31.0", features = ["cli"] }
 tempfile = "3"
 
 [profile.release]
-opt-level = "z"
+opt-level = 3
 lto = true
 codegen-units = 1
 strip = "symbols"
